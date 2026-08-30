@@ -1,23 +1,7 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { ProviderId } from "../core/providers/contracts";
 
-export interface SendTargetRecord {
-  panelId: string;
-  providerId: ProviderId;
-  providerName: string;
-  status: "submitted" | "failed" | "unavailable";
-  message?: string;
-}
-
-export interface SendRecord {
-  id: string;
-  taskId: string;
-  prompt: string;
-  createdAt: string;
-  targets: SendTargetRecord[];
-}
-
-export type SessionStatus = "active" | "archived" | "imported";
+export type SessionSource = "local" | "imported";
 export type SessionLayoutMode = "tiles" | "adaptive";
 export type TurnStatus = "preparing" | "aborted" | "waiting" | "completed" | "partial" | "failed";
 export type ExchangeSubmitStatus =
@@ -44,10 +28,11 @@ export interface SessionRecord {
   id: string;
   title: string;
   createdAt: string;
-  updatedAt: string;
-  status: SessionStatus;
-  /** Optional only for records created before session workspace persistence. */
-  workspace?: SessionWorkspaceSnapshot;
+  contentUpdatedAt: string;
+  lastOpenedAt: string;
+  pinnedAt?: string;
+  source: SessionSource;
+  workspace: SessionWorkspaceSnapshot;
 }
 
 export interface TurnRecord {
@@ -81,27 +66,15 @@ export interface MetadataRecord {
 }
 
 export class AppDatabase extends Dexie {
-  sendRecords!: EntityTable<SendRecord, "id">;
   sessions!: EntityTable<SessionRecord, "id">;
   turns!: EntityTable<TurnRecord, "id">;
   exchanges!: EntityTable<ProviderExchangeRecord, "id">;
   metadata!: EntityTable<MetadataRecord, "key">;
 
-  constructor(name = "multi-ai-workspace-v3") {
+  constructor(name = "multi-ai-workspace-v4") {
     super(name);
     this.version(1).stores({
-      sendRecords: "id, &taskId, createdAt",
-    });
-    this.version(2).stores({
-      sendRecords: "id, &taskId, createdAt",
-      sessions: "id, status, updatedAt, createdAt",
-      turns: "id, sessionId, [sessionId+sequence], createdAt",
-      exchanges: "id, sessionId, turnId, [turnId+providerId], providerId",
-      metadata: "key",
-    });
-    this.version(3).stores({
-      sendRecords: "id, &taskId, createdAt",
-      sessions: "id, status, updatedAt, createdAt",
+      sessions: "id, source, createdAt, contentUpdatedAt, lastOpenedAt, pinnedAt",
       turns: "id, sessionId, [sessionId+sequence], createdAt",
       exchanges: "id, sessionId, turnId, [turnId+providerId], providerId",
       metadata: "key",

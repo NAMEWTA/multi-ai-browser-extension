@@ -12,8 +12,7 @@ import {
   type TurnStatus,
 } from "./database";
 
-const HISTORY_MIGRATION_KEY = "session-history-v1";
-const WORKSPACE_MIGRATION_KEY = "session-workspaces-v1";
+const ACTIVE_SESSION_KEY = "active-session-id";
 const TERMINAL_RESPONSE_STATUSES = new Set<ExchangeResponseStatus>([
   "completed",
   "partial",
@@ -115,116 +114,12 @@ export function normalizeSessionWorkspace(
   };
 }
 
-export function createFallbackSessionWorkspace(
-  exchanges: readonly ProviderExchangeRecord[],
-  timestamp = nowIso(),
-): SessionWorkspaceSnapshot {
-  const panelsByProvider = new Map<ProviderId, ProviderExchangeRecord>();
-  for (const exchange of exchanges.toSorted(
-    (left, right) => left.targetIndex - right.targetIndex,
-  )) {
-    if (!panelsByProvider.has(exchange.providerId)) {
-      panelsByProvider.set(exchange.providerId, exchange);
-    }
-  }
-  return {
-    layoutMode: "tiles",
-    panels: [...panelsByProvider.values()].map((exchange, order) => ({
-      panelId: exchange.panelId || crypto.randomUUID(),
-      providerId: exchange.providerId,
-      url: providerRegistry.get(exchange.providerId).definition.defaultUrl,
-      order,
-      selected: true,
-      widthRatio: 1,
-    })),
-    updatedAt: timestamp,
-  };
-}
-
-async function fallbackWorkspaceForSession(sessionId: string): Promise<SessionWorkspaceSnapshot> {
-  return createFallbackSessionWorkspace(
-    await db.exchanges.where("sessionId").equals(sessionId).toArray(),
-  );
-}
-
-export async function migrateLegacyHistory(): Promise<void> {
-  if (!(await db.metadata.get(HISTORY_MIGRATION_KEY))) {
-    await db.transaction(
-      "rw",
-      db.sendRecords,
-      db.sessions,
-      db.turns,
-      db.exchanges,
-      db.metadata,
-      async () => {
-        if (await db.metadata.get(HISTORY_MIGRATION_KEY)) return;
-        const records = await db.sendRecords.orderBy("createdAt").toArray();
-
-        for (const record of records) {
-          const sessionId = `legacy-session-${record.id}`;
-          const turnId = `legacy-turn-${record.id}`;
-          const exchanges: ProviderExchangeRecord[] = record.targets.map((target, targetIndex) => ({
-            id: crypto.randomUUID(),
-            sessionId,
-            turnId,
-            panelId: target.panelId,
-            providerId: target.providerId,
-            providerName: target.providerName,
-            targetIndex,
-            submitStatus: target.status,
-            responseStatus: "unsupported",
-            ...(target.status === "submitted" ? { submittedAt: record.createdAt } : {}),
-            completedAt: record.createdAt,
-            message: target.message ?? "由旧版发送记录迁移，未采集回复正文",
-          }));
-          await db.sessions.put({
-            id: sessionId,
-            title: titleFromPrompt(record.prompt),
-            createdAt: record.createdAt,
-            updatedAt: record.createdAt,
-            status: "archived",
-            workspace: createFallbackSessionWorkspace(exchanges, record.createdAt),
-          });
-          await db.turns.put({
-            id: turnId,
-            sessionId,
-            sequence: 1,
-            prompt: record.prompt,
-            createdAt: record.createdAt,
-            status: record.targets.some((target) => target.status === "submitted")
-              ? "partial"
-              : "failed",
-          });
-          await db.exchanges.bulkPut(exchanges);
-        }
-
-        await db.metadata.put({ key: HISTORY_MIGRATION_KEY, value: nowIso() });
-      },
-    );
-  }
-  await migrateSessionWorkspaceSnapshots();
-}
-
-export async function migrateSessionWorkspaceSnapshots(): Promise<void> {
-  if (await db.metadata.get(WORKSPACE_MIGRATION_KEY)) return;
-  const sessions = await db.sessions.toArray();
-  for (const session of sessions) {
-    if (session.workspace) continue;
-    await db.sessions.update(session.id, {
-      workspace: await fallbackWorkspaceForSession(session.id),
-    });
-  }
-  await db.metadata.put({ key: WORKSPACE_MIGRATION_KEY, value: nowIso() });
-}
-
 export async function getActiveSession(): Promise<SessionRecord | undefined> {
-  return await db.sessions.where("status").equals("active").last();
-}
-
-export async function ensureActiveSession(firstPrompt = ""): Promise<SessionRecord> {
-  const active = await getActiveSession();
-  if (active) return active;
-  return await createSession(firstPrompt);
+  const activeId = (await db.metadata.get(ACTIVE_SESSION_KEY))?.value;
+  if (!activeId) return undefined;
+  const session = await db.sessions.get(activeId);
+  if (!session) await db.metadata.delete(ACTIVE_SESSION_KEY);
+  return session;
 }
 
 export async function createSession(
@@ -237,42 +132,27 @@ export async function createSession(
     id,
     title: titleFromPrompt(firstPrompt),
     createdAt: timestamp,
-    updatedAt: timestamp,
-    status: "active",
+    contentUpdatedAt: timestamp,
+    lastOpenedAt: timestamp,
+    source: "local",
     workspace: normalizeSessionWorkspace(workspace, timestamp),
   };
-  await db.transaction("rw", db.sessions, async () => {
-    const active = await db.sessions.where("status").equals("active").toArray();
-    await db.sessions.bulkPut(active.map((item) => ({ ...item, status: "archived" as const })));
+  await db.transaction("rw", db.sessions, db.metadata, async () => {
     await db.sessions.add(session);
+    await db.metadata.put({ key: ACTIVE_SESSION_KEY, value: session.id });
   });
   return session;
 }
 
 export async function activateSession(id: string): Promise<SessionRecord> {
-  return await db.transaction("rw", db.sessions, async () => {
+  return await db.transaction("rw", db.sessions, db.metadata, async () => {
     const target = await db.sessions.get(id);
     if (!target) throw new Error("会话不存在");
-    const active = await db.sessions.where("status").equals("active").toArray();
-    await db.sessions.bulkPut(
-      active
-        .filter((session) => session.id !== id)
-        .map((session) => ({ ...session, status: "archived" as const })),
-    );
-    const updated = { ...target, status: "active" as const, updatedAt: nowIso() };
+    const updated = { ...target, lastOpenedAt: nowIso() };
     await db.sessions.put(updated);
+    await db.metadata.put({ key: ACTIVE_SESSION_KEY, value: id });
     return updated;
   });
-}
-
-export async function getSessionWorkspaceSnapshot(
-  sessionId: string,
-): Promise<SessionWorkspaceSnapshot | undefined> {
-  const session = await db.sessions.get(sessionId);
-  if (!session) return undefined;
-  return session.workspace
-    ? normalizeSessionWorkspace(session.workspace, session.workspace.updatedAt)
-    : await fallbackWorkspaceForSession(sessionId);
 }
 
 export async function updateSessionWorkspaceSnapshot(
@@ -283,49 +163,9 @@ export async function updateSessionWorkspaceSnapshot(
   const normalized = normalizeSessionWorkspace(workspace, timestamp);
   const updated = await db.sessions.update(sessionId, {
     workspace: normalized,
-    updatedAt: timestamp,
   });
   if (!updated) throw new Error("会话不存在");
   return normalized;
-}
-
-export async function createTurn(
-  sessionId: string,
-  prompt: string,
-  targets: readonly SessionTarget[],
-  id: string = crypto.randomUUID(),
-): Promise<TurnRecord> {
-  const timestamp = nowIso();
-  return await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
-    const session = await db.sessions.get(sessionId);
-    if (!session) throw new Error("会话不存在");
-    const last = await db.turns.where("sessionId").equals(sessionId).last();
-    const turn: TurnRecord = {
-      id,
-      sessionId,
-      sequence: (last?.sequence ?? 0) + 1,
-      prompt,
-      createdAt: timestamp,
-      status: "preparing",
-    };
-    await db.turns.add(turn);
-    await db.exchanges.bulkAdd(
-      targets.map((target, targetIndex) => ({
-        id: crypto.randomUUID(),
-        sessionId,
-        turnId: id,
-        ...target,
-        targetIndex,
-        submitStatus: "pending" as const,
-        responseStatus: "waiting" as const,
-      })),
-    );
-    await db.sessions.update(sessionId, {
-      updatedAt: timestamp,
-      ...(session.title === "新会话" ? { title: titleFromPrompt(prompt) } : {}),
-    });
-    return turn;
-  });
 }
 
 /**
@@ -413,7 +253,7 @@ export async function recordSuccessfulTurn(
     await db.turns.add(turn);
     await db.exchanges.bulkAdd(exchanges);
     await db.sessions.update(sessionId, {
-      updatedAt: timestamp,
+      contentUpdatedAt: timestamp,
       ...(session.title === "新会话" ? { title: titleFromPrompt(prompt) } : {}),
     });
     return turn;
@@ -425,46 +265,6 @@ function submitStatusFromResult(status: SubmitResultLike["status"]): ExchangeSub
   if (status === "prechecked" || status === "staged") return "prepared";
   if (status === "rolled-back") return "aborted";
   return status;
-}
-
-export async function applySubmitResults(
-  turnId: string,
-  results: readonly SubmitResultLike[],
-): Promise<void> {
-  const timestamp = nowIso();
-  await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
-    const turn = await db.turns.get(turnId);
-    if (!turn) return;
-    const resultByPanel = new Map(results.map((result) => [result.panelId, result]));
-    const exchanges = await db.exchanges.where("turnId").equals(turnId).toArray();
-    let submitted = 0;
-
-    await db.exchanges.bulkPut(
-      exchanges.map((exchange) => {
-        const result = resultByPanel.get(exchange.panelId);
-        const submitStatus = result ? submitStatusFromResult(result.status) : "unavailable";
-        if (submitStatus === "submitted") submitted += 1;
-        return {
-          ...exchange,
-          submitStatus,
-          responseStatus: submitStatus === "submitted" ? "waiting" : "failed",
-          ...(submitStatus === "submitted"
-            ? { submittedAt: timestamp }
-            : { completedAt: timestamp }),
-          ...(result?.message ? { message: result.message } : {}),
-        };
-      }),
-    );
-
-    const status: TurnStatus =
-      submitted > 0
-        ? "waiting"
-        : results.some((result) => result.status === "aborted")
-          ? "aborted"
-          : "failed";
-    await db.turns.update(turnId, { status });
-    await db.sessions.update(turn.sessionId, { updatedAt: timestamp });
-  });
 }
 
 export async function applyResponseUpdate(
@@ -513,12 +313,45 @@ export async function applyResponseUpdate(
             : "failed";
     }
     await db.turns.update(turnId, { status: turnStatus });
-    await db.sessions.update(turn.sessionId, { updatedAt: timestamp });
+    await db.sessions.update(turn.sessionId, { contentUpdatedAt: timestamp });
   });
 }
 
 export async function listSessions(limit = 100): Promise<SessionRecord[]> {
-  return await db.sessions.orderBy("updatedAt").reverse().limit(limit).toArray();
+  const sessions = await db.sessions.toArray();
+  return sessions.toSorted(compareSessions).slice(0, limit);
+}
+
+function compareSessions(left: SessionRecord, right: SessionRecord): number {
+  if (left.pinnedAt && !right.pinnedAt) return -1;
+  if (!left.pinnedAt && right.pinnedAt) return 1;
+  if (left.pinnedAt && right.pinnedAt) {
+    const pinnedOrder = right.pinnedAt.localeCompare(left.pinnedAt);
+    if (pinnedOrder !== 0) return pinnedOrder;
+  }
+  const createdOrder = right.createdAt.localeCompare(left.createdAt);
+  return createdOrder !== 0 ? createdOrder : left.id.localeCompare(right.id);
+}
+
+export async function setSessionPinned(id: string, pinned: boolean): Promise<SessionRecord> {
+  const session = await db.sessions.get(id);
+  if (!session) throw new Error("会话不存在");
+  if (pinned === Boolean(session.pinnedAt)) return session;
+  if (pinned) {
+    const updated = { ...session, pinnedAt: nowIso() };
+    await db.sessions.put(updated);
+    return updated;
+  }
+  const updated = { ...session };
+  delete updated.pinnedAt;
+  await db.sessions.put(updated);
+  return updated;
+}
+
+export async function toggleSessionPinned(id: string): Promise<SessionRecord> {
+  const session = await db.sessions.get(id);
+  if (!session) throw new Error("会话不存在");
+  return await setSessionPinned(id, !session.pinnedAt);
 }
 
 export async function getSessionDetail(id: string): Promise<SessionDetail | undefined> {
@@ -544,19 +377,12 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
+  await db.transaction("rw", db.sessions, db.turns, db.exchanges, db.metadata, async () => {
     await db.exchanges.where("sessionId").equals(id).delete();
     await db.turns.where("sessionId").equals(id).delete();
     await db.sessions.delete(id);
-  });
-}
-
-export async function discardTurn(id: string): Promise<void> {
-  await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
-    const turn = await db.turns.get(id);
-    if (!turn) return;
-    await db.exchanges.where("turnId").equals(id).delete();
-    await db.turns.delete(id);
-    await db.sessions.update(turn.sessionId, { updatedAt: nowIso() });
+    if ((await db.metadata.get(ACTIVE_SESSION_KEY))?.value === id) {
+      await db.metadata.delete(ACTIVE_SESSION_KEY);
+    }
   });
 }

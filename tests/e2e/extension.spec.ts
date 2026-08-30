@@ -116,6 +116,15 @@ test("submits exactly once and stores provider replies in the session timeline",
     },
   );
   await detail.getByTitle("关闭").click();
+
+  await workspace.getByLabel("复制或下载当前任务").click();
+  await workspace.getByRole("menuitem", { name: "复制所有站点最近一轮" }).click();
+  await expect(workspace.getByRole("status")).toContainText("已复制当前网页的最近一轮回复");
+
+  const deepSeekPanel = workspace.locator("article.provider-panel", { hasText: "DeepSeek" });
+  await deepSeekPanel.getByLabel("复制 DeepSeek 会话").click();
+  await deepSeekPanel.getByRole("menuitem", { name: "复制最后一次问答" }).click();
+  await expect(workspace.getByRole("status")).toContainText("已复制 DeepSeek 最近一次问答");
 });
 
 test("keeps multiple turns and restores exact official URLs when switching tasks", async () => {
@@ -149,6 +158,22 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
   await expect
     .poll(async () => await getFrameUrls(workspace), { timeout: 12_000 })
     .toEqual(newUrls);
+});
+
+test("keeps sidebar order stable until a session is explicitly pinned", async () => {
+  const currentTitle = "新任务的第一个问题";
+  const olderTitle = "你是什么模型";
+  const titlesBefore = await workspace.locator(".history-item > span").allTextContents();
+
+  await workspace.locator(".history-item", { hasText: olderTitle }).click();
+  await expect(workspace.locator(".history-item > span")).toHaveText(titlesBefore);
+
+  const olderRow = workspace.locator(".history-row", { hasText: olderTitle });
+  await olderRow.getByLabel("置顶会话").click();
+  await expect(workspace.locator(".history-item").first()).toContainText(olderTitle);
+
+  await workspace.locator(".history-row", { hasText: olderTitle }).getByLabel("取消置顶").click();
+  await expect(workspace.locator(".history-item").first()).toContainText(currentTitle);
 });
 
 test("manages all seven preconfigured websites and exposes experimental embed status", async () => {

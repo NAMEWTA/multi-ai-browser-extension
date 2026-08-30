@@ -126,6 +126,17 @@ export const workspaceFrameStatusSchema = frameStatusSchema.extend({
   type: z.literal("WORKSPACE_FRAME_STATUS"),
 });
 
+const composerCandidateDiagnosticSchema = z
+  .object({
+    descriptor: z.string().min(1).max(160),
+    score: z.number().int().min(-2_000).max(2_000),
+    normalizedLength: z.number().int().min(0).max(100_000),
+    selected: z.boolean(),
+    eligible: z.boolean(),
+    reason: z.enum(["hidden", "disabled", "readonly", "search", "not-editable"]).optional(),
+  })
+  .strict();
+
 export const providerDiagnosticSchema = z
   .object({
     type: z.literal("PROVIDER_DIAGNOSTIC"),
@@ -148,6 +159,7 @@ export const providerDiagnosticSchema = z
     promptLength: z.number().int().min(0).max(100_000).optional(),
     durationMs: z.number().int().min(0).max(180_000).optional(),
     composer: z.string().max(300).optional(),
+    composerCandidates: z.array(composerCandidateDiagnosticSchema).max(12).optional(),
     submit: z.string().max(300).optional(),
     errorCode: z.enum(providerErrorCodes).optional(),
   })

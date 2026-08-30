@@ -1,21 +1,11 @@
 import { z } from "zod";
 import { providerIds } from "../core/providers/contracts";
-import {
-  db,
-  type ProviderExchangeRecord,
-  type SessionRecord,
-  type SessionWorkspaceSnapshot,
-  type TurnRecord,
-} from "./database";
-import {
-  createFallbackSessionWorkspace,
-  getSessionWorkspaceSnapshot,
-  isProviderWorkspaceUrl,
-  normalizeSessionWorkspace,
-} from "./session-service";
+import { db, type ProviderExchangeRecord, type SessionRecord, type TurnRecord } from "./database";
+import { isProviderWorkspaceUrl, normalizeSessionWorkspace } from "./session-service";
 
 export const HISTORY_FILE_EXTENSION = ".maiw.jsonl";
 export const MAX_HISTORY_IMPORT_BYTES = 50 * 1024 * 1024;
+export const HISTORY_FORMAT_VERSION = 3;
 
 const providerIdSchema = z.enum(providerIds);
 const workspacePanelSchema = z
@@ -56,17 +46,18 @@ const workspaceSchema = z
     }
   });
 
-const sessionBaseSchema = z
+const sessionSchema = z
   .object({
     id: z.string().min(1),
     title: z.string().max(500),
     createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-    status: z.enum(["active", "archived", "imported"]),
+    contentUpdatedAt: z.iso.datetime(),
+    lastOpenedAt: z.iso.datetime(),
+    pinnedAt: z.iso.datetime().optional(),
+    source: z.enum(["local", "imported"]),
+    workspace: workspaceSchema,
   })
   .strict();
-const sessionV1Schema = sessionBaseSchema;
-const sessionV2Schema = sessionBaseSchema.extend({ workspace: workspaceSchema }).strict();
 
 const turnSchema = z
   .object({
@@ -109,7 +100,7 @@ const manifestSchema = z
   .object({
     type: z.literal("manifest"),
     format: z.literal("multi-ai-workspace-history"),
-    version: z.union([z.literal(1), z.literal(2)]),
+    version: z.literal(HISTORY_FORMAT_VERSION),
     exportedAt: z.iso.datetime(),
     counts: z
       .object({
@@ -121,33 +112,23 @@ const manifestSchema = z
   })
   .strict();
 
-type ParsedSessionV1 = z.infer<typeof sessionV1Schema>;
-type ParsedSessionV2 = z.infer<typeof sessionV2Schema>;
-type ParsedSession = ParsedSessionV1 | ParsedSessionV2;
 type ParsedLine =
-  | { type: "session"; data: ParsedSession }
+  | { type: "session"; data: z.infer<typeof sessionSchema> }
   | { type: "turn"; data: z.infer<typeof turnSchema> }
   | { type: "exchange"; data: z.infer<typeof exchangeSchema> };
 
-function parseDataLine(raw: unknown, version: 1 | 2): ParsedLine {
+function parseDataLine(raw: unknown): ParsedLine {
   const envelope = z
     .object({ type: z.enum(["session", "turn", "exchange"]), data: z.unknown() })
     .strict()
     .parse(raw);
   if (envelope.type === "session") {
-    return {
-      type: "session",
-      data: (version === 2 ? sessionV2Schema : sessionV1Schema).parse(envelope.data),
-    };
+    return { type: "session", data: sessionSchema.parse(envelope.data) };
   }
   if (envelope.type === "turn") {
     return { type: "turn", data: turnSchema.parse(envelope.data) };
   }
   return { type: "exchange", data: exchangeSchema.parse(envelope.data) };
-}
-
-function hasWorkspace(session: ParsedSession): session is ParsedSessionV2 {
-  return "workspace" in session && workspaceSchema.safeParse(session.workspace).success;
 }
 
 export interface ImportSummary {
@@ -157,20 +138,14 @@ export interface ImportSummary {
 }
 
 export async function exportHistoryJsonl(): Promise<string> {
-  const rawSessions = await db.sessions.orderBy("createdAt").toArray();
-  const sessions = await Promise.all(
-    rawSessions.map(async (session) => ({
-      ...session,
-      workspace: (await getSessionWorkspaceSnapshot(session.id))!,
-    })),
-  );
+  const sessions = await db.sessions.orderBy("createdAt").toArray();
   const turns = await db.turns.orderBy("createdAt").toArray();
   const exchanges = await db.exchanges.toArray();
   const lines: unknown[] = [
     {
       type: "manifest",
       format: "multi-ai-workspace-history",
-      version: 2,
+      version: HISTORY_FORMAT_VERSION,
       exportedAt: new Date().toISOString(),
       counts: { sessions: sessions.length, turns: turns.length, exchanges: exchanges.length },
     },
@@ -194,21 +169,11 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
 
   const parsed = rawLines.slice(1).map((line, offset) => {
     try {
-      const raw = JSON.parse(line) as unknown;
-      if (
-        typeof raw === "object" &&
-        raw !== null &&
-        "type" in raw &&
-        (raw as { type?: unknown }).type === "manifest"
-      ) {
-        throw new Error("历史文件包含重复 manifest");
-      }
-      return parseDataLine(raw, manifest.version);
+      return parseDataLine(JSON.parse(line) as unknown);
     } catch (error) {
       throw new Error(`历史文件第 ${offset + 2} 行格式无效`, { cause: error });
     }
   });
-
   const sessions = parsed.flatMap((line) => (line.type === "session" ? [line.data] : []));
   const turns = parsed.flatMap((line) => (line.type === "turn" ? [line.data] : []));
   const exchanges = parsed.flatMap((line) => (line.type === "exchange" ? [line.data] : []));
@@ -233,12 +198,12 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
   if (turns.some((turn) => !sessionIds.has(turn.sessionId))) {
     throw new Error("历史文件包含无效的 turn.sessionId");
   }
+  const turnSessions = new Map(turns.map((turn) => [turn.id, turn.sessionId]));
   if (
     exchanges.some(
       (exchange) =>
         !sessionIds.has(exchange.sessionId) ||
-        !turnIds.has(exchange.turnId) ||
-        turns.find((turn) => turn.id === exchange.turnId)?.sessionId !== exchange.sessionId,
+        turnSessions.get(exchange.turnId) !== exchange.sessionId,
     )
   ) {
     throw new Error("历史文件包含无效的 exchange 引用");
@@ -249,7 +214,6 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
   const panelIdMap = new Map<string, string>();
   const panelKey = (sessionId: string, panelId: string) => JSON.stringify([sessionId, panelId]);
   for (const session of sessions) {
-    if (!hasWorkspace(session)) continue;
     for (const panel of session.workspace.panels) {
       panelIdMap.set(panelKey(session.id, panel.panelId), crypto.randomUUID());
     }
@@ -279,30 +243,22 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
     ...(exchange.completedAt !== undefined ? { completedAt: exchange.completedAt } : {}),
     ...(exchange.message !== undefined ? { message: exchange.message } : {}),
   }));
-  const importedSessions: SessionRecord[] = sessions.map((session) => {
-    const importedSessionId = sessionIdMap.get(session.id)!;
-    let workspace: SessionWorkspaceSnapshot;
-    if (hasWorkspace(session)) {
-      workspace = normalizeSessionWorkspace({
-        ...session.workspace,
-        panels: session.workspace.panels.map((panel) => ({
-          ...panel,
-          panelId: panelIdMap.get(panelKey(session.id, panel.panelId))!,
-        })),
-      });
-    } else {
-      workspace = createFallbackSessionWorkspace(
-        importedExchanges.filter((exchange) => exchange.sessionId === importedSessionId),
-        session.updatedAt,
-      );
-    }
-    return {
-      ...session,
-      id: importedSessionId,
-      status: "imported",
-      workspace,
-    };
-  });
+  const importedSessions: SessionRecord[] = sessions.map((session) => ({
+    id: sessionIdMap.get(session.id)!,
+    title: session.title,
+    createdAt: session.createdAt,
+    contentUpdatedAt: session.contentUpdatedAt,
+    lastOpenedAt: session.lastOpenedAt,
+    ...(session.pinnedAt !== undefined ? { pinnedAt: session.pinnedAt } : {}),
+    source: "imported",
+    workspace: normalizeSessionWorkspace({
+      ...session.workspace,
+      panels: session.workspace.panels.map((panel) => ({
+        ...panel,
+        panelId: panelIdMap.get(panelKey(session.id, panel.panelId))!,
+      })),
+    }),
+  }));
 
   await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
     await db.sessions.bulkAdd(importedSessions);

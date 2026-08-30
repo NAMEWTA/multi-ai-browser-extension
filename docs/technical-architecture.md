@@ -1,8 +1,8 @@
 # Multi AI Workspace 技术架构
 
 > 状态：当前唯一技术基线
-> 版本：5.0
-> 更新日期：2026-08-30
+> 版本：6.0
+> 更新日期：2026-08-31
 
 ## 1. 架构结论
 
@@ -88,6 +88,8 @@ use staged composer and submit control
 
 Provider 使用 phase record 与 `TaskLedger` 对 `turnId` 去重，要求状态严格按 prechecked -> staged -> submitted 推进。
 
+Precheck 选定的 composer 会绑定在本轮 phase record 中，Stage、Commit 和 Rollback 必须继续使用同一个 DOM 元素。元素断开或被官网替换时安全失败，不允许重新查询后切换到另一个候选。
+
 浏览器无法回滚已发生的跨站点击。因此“原子性”严格保证到 commit barrier；commit 内的运行时单站失败记录为部分提交，而不是虚构全局回滚。
 
 至少一个目标返回 `submitted/duplicate` 后，工作台才调用 `recordSuccessfulTurn`，在单个 Dexie 事务内创建 Turn、Exchange、逐站结果并合并早到回复。全失败不落库。
@@ -105,6 +107,7 @@ interface ProviderStrategy {
   submit(ctx: FrameContext): Promise<void>;
   captureResponse(ctx, baseline, onUpdate): Promise<ResponseCaptureUpdate>;
   startNewConversation(ctx: FrameContext): Promise<void>;
+  diagnoseComposerCandidates?(ctx): readonly ComposerCandidateDiagnostic[];
 }
 ```
 
@@ -117,6 +120,8 @@ interface ProviderStrategy {
 `BaseDomStrategy` 固化预检、暂存、条件回滚、提交确认和回复稳定判定。站点策略仅覆写特殊编辑器或复用控件行为。
 
 Kimi Lexical 使用浏览器原生编辑命令并回读，不直接伪造 React/Lexical 内部状态。DeepSeek 的圆形控件会在“发送/停止”之间复用，因此在 Stage 写入后校验控件语义，避免空输入状态误判或点击停止。
+
+千问使用独立语义候选排名：排除搜索框、隐藏、只读、disabled 和不可编辑候选，优先当前主 composer、聊天语义和相邻 submit。占位节点与零宽标记在草稿判断时归一为空；诊断仅保存结构、得分、长度和拒绝原因，不保存正文。
 
 ### 4.3 Selector 顺序
 
@@ -146,9 +151,9 @@ Session 快照保存 `layoutMode` 以及按顺序排列的 `{panelId, providerId
 
 ```ts
 SessionRecord {
-  id; title; createdAt; updatedAt;
-  status: "active" | "archived" | "imported";
-  workspace?: SessionWorkspaceSnapshot;
+  id; title; createdAt; contentUpdatedAt; lastOpenedAt; pinnedAt?;
+  source: "local" | "imported";
+  workspace: SessionWorkspaceSnapshot;
 }
 
 TurnRecord {
@@ -164,7 +169,9 @@ ProviderExchangeRecord {
 }
 ```
 
-Dexie 使用数据库 `multi-ai-workspace-v3` 的 schema version 3。旧 `sendRecords` 和无 workspace 的 Session 通过独立迁移标记一次性升级；后续新功能不再写旧表。
+Dexie 使用全新数据库 `multi-ai-workspace-v4` 的单一当前 schema。活动 Session ID 独立保存于 metadata；会话列表只按显式 `pinnedAt` 和稳定 `createdAt` 排序，打开、发送、回复及工作区保存均不改变列表位置。
+
+开发阶段不维护旧数据库迁移链，也不存在“先创建 Turn、再补提交结果”的旧写入 API。唯一发送落库入口是 `recordSuccessfulTurn`，至少一个站点确认提交后才在单一事务中创建 Turn 与 Exchange。
 
 Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；存在有效回复和失败/超时为 `partial`；无有效回复为 `failed`。
 
@@ -173,15 +180,19 @@ Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；�
 文件扩展名 `.maiw.jsonl`，UTF-8，每行独立 JSON：
 
 ```json
-{"type":"manifest","format":"multi-ai-workspace-history","version":2,"exportedAt":"...","counts":{"sessions":1,"turns":2,"exchanges":4}}
+{"type":"manifest","format":"multi-ai-workspace-history","version":3,"exportedAt":"...","counts":{"sessions":1,"turns":2,"exchanges":4}}
 {"type":"session","data":{}}
 {"type":"turn","data":{}}
 {"type":"exchange","data":{}}
 ```
 
-导入上限 50 MB。解析器兼容 v1/v2，要求首行 manifest、唯一 manifest、清单数量一致、实体 ID 唯一、引用完整、Provider ID 受支持。快照 URL 必须属于对应官方 HTTPS origin。全部校验通过后才在单个 Dexie 事务中写入；Session、Turn、Exchange 和 Panel ID 全部重映射。
+导入上限 50 MB。解析器只接受当前 v3，要求首行 manifest、唯一 manifest、清单数量一致、实体 ID 唯一、引用完整、Provider ID 受支持。快照 URL 必须属于对应官方 HTTPS origin。全部校验通过后才在单个 Dexie 事务中写入；Session、Turn、Exchange 和 Panel ID 全部重映射。
 
-## 9. 生命周期、权限与隐私
+## 9. Markdown 转录
+
+转录器是纯领域服务，只读取持久化的 `SessionDetail`，不跨域抓取父页面中的 iframe。支持完整 Session、当前打开 Provider、最新一轮、单 Provider 完整会话和单 Provider 最新问答五种范围，输出确定性的标题层级与安全文件名。剪贴板和下载只是 Workspace 的 I/O adapter。
+
+## 10. 生命周期、权限与隐私
 
 - `storage`：工作台设置、Dexie 历史和有界 runtime snapshot。
 - `tabs`：工作台聚焦和普通标签页降级。
@@ -191,18 +202,18 @@ Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；�
 
 不申请 `cookies` 权限。Content Script 不能直接写 `storage.session` 诊断；它只发送严格校验、无正文的诊断事件，由 Worker 验证 frame 绑定后写入每面板最多 80 条的环形记录。
 
-## 10. 布局稳定性
+## 11. 布局稳定性
 
 - iframe 始终按容器原生 CSS 像素渲染，禁止 `transform: scale()`。
 - 平铺使用站点轨道与 8px 分隔轨道交错的 CSS Grid，拖动只修改相邻比例。
 - 自适应按容器整数宽度选择列数；`ResizeObserver` 不反写被观察尺寸。
 - 切换布局、拖动、最大化均不卸载 iframe。拖动期间暂时禁止 iframe pointer events。
 
-## 11. 验证分层
+## 12. 验证分层
 
 | 层级             | 重点                                                       |
 | ---------------- | ---------------------------------------------------------- |
-| 单元             | Zod 协议、DOM adapter、幂等、Session 聚合、迁移、JSONL     |
+| 单元             | Zod 协议、DOM adapter、幂等、Session 排序、转录、JSONL     |
 | Provider fixture | Precheck 零副作用、Stage 回滚、唯一提交、回复完成          |
 | 扩展 E2E         | 动态按钮、Stage 回滚、失败零 Turn、完整 URL 往返、布局稳定 |
 | 真实 smoke       | 最终 URL、登录态、真实 selector、一次发送和降级            |

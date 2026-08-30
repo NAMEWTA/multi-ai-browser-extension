@@ -17,38 +17,60 @@ export function watchProviderStatus(
   providerId: ProviderId,
 ): void {
   let checking = false;
+  let checkAgain = false;
   let lastStatus = "";
+  let stopped = false;
 
   const check = async () => {
-    if (checking) return;
+    if (stopped) return;
+    if (checking) {
+      checkAgain = true;
+      return;
+    }
     checking = true;
     try {
-      const probe = await strategy.probe(ctx);
-      if (probe.status === lastStatus) return;
-      lastStatus = probe.status;
-      await browser.runtime
-        .sendMessage({
-          type: "FRAME_STATUS",
-          panelId,
-          providerId,
-          status: probe.status,
-          ...(probe.detail ? { message: probe.detail } : {}),
-        })
-        .catch(() => undefined);
+      do {
+        checkAgain = false;
+        const probe = await strategy.probe(ctx);
+        if (probe.status !== lastStatus) {
+          lastStatus = probe.status;
+          await browser.runtime
+            .sendMessage({
+              type: "FRAME_STATUS",
+              panelId,
+              providerId,
+              status: probe.status,
+              ...(probe.detail ? { message: probe.detail } : {}),
+            })
+            .catch(() => undefined);
+        }
+      } while (checkAgain && !stopped);
     } finally {
       checking = false;
     }
   };
 
   void check();
-  const observer = new MutationObserver(() => void check());
+  const observer = new MutationObserver(() => {
+    checkAgain = true;
+    void check();
+  });
   observer.observe(ctx.document.documentElement, {
     childList: true,
     subtree: true,
     attributes: true,
     attributeFilter: ["class", "disabled", "aria-disabled", "style"],
   });
-  ctx.window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
+  const interval = ctx.window.setInterval(() => void check(), 2_000);
+  ctx.window.addEventListener(
+    "pagehide",
+    () => {
+      stopped = true;
+      observer.disconnect();
+      ctx.window.clearInterval(interval);
+    },
+    { once: true },
+  );
 }
 
 export async function reportProviderReady(panelId: string, providerId: ProviderId): Promise<void> {

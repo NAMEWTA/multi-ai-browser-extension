@@ -1,5 +1,5 @@
 import { browser } from "wxt/browser";
-import type { ProviderId } from "../core/providers/contracts";
+import type { ComposerCandidateDiagnostic, ProviderId } from "../core/providers/contracts";
 
 export type DiagnosticStage =
   | "frame-ready"
@@ -20,6 +20,7 @@ interface DiagnosticRecord {
   readonly promptLength?: number;
   readonly durationMs?: number;
   readonly composer?: string;
+  readonly composerCandidates?: readonly ComposerCandidateDiagnostic[];
   readonly submit?: string;
   readonly errorCode?: string;
 }

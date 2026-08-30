@@ -110,6 +110,42 @@ describe("runtime message validation", () => {
       providerDiagnosticSchema.safeParse({
         type: "PROVIDER_DIAGNOSTIC",
         panelId: "panel-1",
+        providerId: "qwen",
+        stage: "command-start",
+        composerCandidates: [
+          {
+            descriptor: "textarea#chat-input",
+            score: 400,
+            normalizedLength: 4,
+            selected: true,
+            eligible: true,
+            value: "不得记录正文",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      providerDiagnosticSchema.safeParse({
+        type: "PROVIDER_DIAGNOSTIC",
+        panelId: "panel-1",
+        providerId: "qwen",
+        stage: "command-start",
+        operation: "precheck",
+        composerCandidates: [
+          {
+            descriptor: "textarea#chat-input",
+            score: 400,
+            normalizedLength: 0,
+            selected: true,
+            eligible: true,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      providerDiagnosticSchema.safeParse({
+        type: "PROVIDER_DIAGNOSTIC",
+        panelId: "panel-1",
         providerId: "deepseek",
         stage: "command-failed",
         prompt: "正文不得进入诊断协议",

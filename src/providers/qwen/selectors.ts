@@ -3,7 +3,10 @@ import type { ProviderSelectors } from "../../core/providers/contracts";
 export const qwenSelectors = {
   composer: [
     "textarea#chat-input",
+    "[data-slate-editor='true'][contenteditable='true']",
+    "[role='textbox'][contenteditable='true']",
     "textarea[placeholder*='千问']",
+    "textarea[placeholder*='问']",
     "textarea[placeholder*='Qwen']",
     "textarea[placeholder*='Ask']",
     "textarea[placeholder]",

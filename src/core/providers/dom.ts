@@ -11,8 +11,16 @@ export function isElementUsable(element: Element): element is HTMLElement {
 export function isElementVisible(element: Element): element is HTMLElement {
   if (!(element instanceof HTMLElement)) return false;
   if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
-  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-  return !(style?.display === "none" || style?.visibility === "hidden");
+  const elementStyle = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (elementStyle?.display === "none" || elementStyle?.visibility === "hidden") return false;
+  let current: HTMLElement | null = element.parentElement;
+  while (current) {
+    if (current.hidden) return false;
+    const style = current.ownerDocument.defaultView?.getComputedStyle(current);
+    if (style?.display === "none") return false;
+    current = current.parentElement;
+  }
+  return true;
 }
 
 export function findFirstUsable(
@@ -78,14 +86,29 @@ export async function waitForElement(
     anchor?: HTMLElement | undefined;
   } = {},
 ): Promise<HTMLElement> {
-  const existing = findFirstUsable(document, selectors, options.anchor);
+  return await waitForResolvedElement(
+    document,
+    () => findFirstUsable(document, selectors, options.anchor),
+    options,
+  );
+}
+
+export async function waitForResolvedElement(
+  document: Document,
+  resolveElement: () => HTMLElement | undefined,
+  options: {
+    signal?: AbortSignal | undefined;
+    timeoutMs?: number | undefined;
+  } = {},
+): Promise<HTMLElement> {
+  const existing = resolveElement();
   if (existing) return existing;
 
   const timeoutMs = options.timeoutMs ?? 15_000;
   return await new Promise<HTMLElement>((resolve, reject) => {
     const abort = () => finish(new ProviderError("ABORTED", "页面元素等待已取消"));
     const observer = new MutationObserver(() => {
-      const element = findFirstUsable(document, selectors, options.anchor);
+      const element = resolveElement();
       if (element) finish(undefined, element);
     });
     const timeout = window.setTimeout(
@@ -134,7 +157,13 @@ export function readComposerValue(element: HTMLElement): string {
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
     return element.value;
   }
-  return element.textContent ?? "";
+  const clone = element.cloneNode(true) as HTMLElement;
+  for (const placeholder of clone.querySelectorAll(
+    "[data-placeholder], [data-slate-placeholder], [data-slate-zero-width], [class*='placeholder' i]",
+  )) {
+    placeholder.remove();
+  }
+  return clone.textContent ?? "";
 }
 
 export function dispatchInputEvents(element: HTMLElement, text: string): void {
@@ -165,5 +194,8 @@ export async function waitForCondition(
 }
 
 export function normalizeComposerValue(value: string): string {
-  return value.replace(/\r\n/g, "\n").trim();
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .trim();
 }

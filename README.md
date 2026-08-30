@@ -12,6 +12,8 @@ Chrome/Chromium 全页扩展工作台：在一个标签页中并排打开多个�
 - 只操作网页 DOM，不调用模型 API、站点内部接口或保存 API Key。
 - 本地历史按 Session 和 Turn 保存提问、逐站发送状态及可见的最终回复纯文本。
 - 只有“新任务”会在已打开官网中触发新建对话；普通连续发送保持同一上下文。
+- 历史会话点击只切换，显式置顶才改变顺序；统一弹窗按时间查看全部 AI 回复。
+- 当前任务、单个 AI 和最近一轮均可复制或下载为结构化 Markdown。
 - 历史可通过版本化 `.maiw.jsonl` 文件整体导入和导出。
 - 站点不能稳定嵌入时，降级到普通浏览器标签页继续统一发送。
 
@@ -67,8 +69,8 @@ pnpm build
 推送与 `package.json` 版本一致的语义化标签会自动运行验证、打包并创建 GitHub Release：
 
 ```bash
-git tag v0.0.1
-git push origin v0.0.1
+git tag v0.0.1-alpha.7
+git push origin v0.0.1-alpha.7
 ```
 
 Release 包含 Chrome ZIP、Windows 安装辅助脚本和 SHA-256 校验文件。工作流定义位于 [release.yml](.github/workflows/release.yml)。

@@ -5,7 +5,13 @@ import {
   type ProviderCommand,
   type ProviderRunResult,
 } from "../core/messaging/protocol";
-import type { ResponseBaseline, ResponseCaptureUpdate } from "../core/providers/contracts";
+import type {
+  ComposerCandidateDiagnostic,
+  FrameContext,
+  ProviderStrategy,
+  ResponseBaseline,
+  ResponseCaptureUpdate,
+} from "../core/providers/contracts";
 import { normalizeProviderError, ProviderError } from "../core/providers/errors";
 import { providerRegistry } from "../core/providers/registry";
 import { TaskLedger } from "../core/orchestration/task-ledger";
@@ -101,14 +107,20 @@ export default defineContentScript({
       const promptLength =
         command.type === "START_NEW_CONVERSATION" ? undefined : command.prompt.length;
       const startedAt = performance.now();
-      const composerDescription = describeProviderElement(
-        document.querySelector("[data-lexical-editor='true'], textarea, [contenteditable='true']"),
-      );
+      const composerCandidates = safeComposerCandidateDiagnostics(strategy, ctx);
+      const composerDescription =
+        composerCandidates?.find((candidate) => candidate.selected)?.descriptor ??
+        describeProviderElement(
+          document.querySelector(
+            "[data-lexical-editor='true'], textarea, [contenteditable='true']",
+          ),
+        );
       void appendProviderDiagnostic(panelId, plugin.definition.id, {
         stage: "command-start",
         operation,
         ...(promptLength !== undefined ? { promptLength } : {}),
         ...(composerDescription ? { composer: composerDescription } : {}),
+        ...(composerCandidates?.length ? { composerCandidates } : {}),
       }).catch(() => undefined);
 
       try {
@@ -314,12 +326,16 @@ export default defineContentScript({
         return result;
       } catch (error) {
         const normalized = normalizeProviderError(error);
+        const failedComposerCandidates = safeComposerCandidateDiagnostics(strategy, ctx);
         void appendProviderDiagnostic(panelId, plugin.definition.id, {
           stage: "command-failed",
           operation,
           ...(promptLength !== undefined ? { promptLength } : {}),
           durationMs: Math.round(performance.now() - startedAt),
           errorCode: normalized.code,
+          ...(failedComposerCandidates?.length
+            ? { composerCandidates: failedComposerCandidates }
+            : {}),
         }).catch(() => undefined);
         if (command.type === "COMMIT_PROMPT") {
           preparedTurns.delete(command.turnId);
@@ -378,4 +394,15 @@ function commandOperation(command: ProviderCommand): ProviderRunResult["operatio
         : command.type === "ROLLBACK_PROMPT"
           ? "rollback"
           : "new-session";
+}
+
+function safeComposerCandidateDiagnostics(
+  strategy: ProviderStrategy,
+  ctx: FrameContext,
+): readonly ComposerCandidateDiagnostic[] | undefined {
+  try {
+    return strategy.diagnoseComposerCandidates?.(ctx).slice(0, 12);
+  } catch {
+    return undefined;
+  }
 }

@@ -112,6 +112,36 @@ describe("BaseDomStrategy", () => {
     expect(document.querySelector<HTMLTextAreaElement>("#composer")?.value).toBe("");
   });
 
+  it("ignores editor placeholder nodes and zero-width markers when checking for a draft", async () => {
+    document.body.innerHTML = `
+      <div id="composer" contenteditable="true">
+        <span data-placeholder="Ask anything">Ask anything</span>
+        <span data-slate-zero-width="z">\u200B</span>
+      </div>
+    `;
+    await expect(
+      new TestStrategy().prepareSubmit({ document, window, timeoutMs: 10 }),
+    ).resolves.toEqual({ count: 0, lastText: "" });
+  });
+
+  it("keeps the composer selected during precheck bound through staging", async () => {
+    document.body.innerHTML = `
+      <textarea id="composer"></textarea>
+      <button id="send">send</button>
+    `;
+    const original = document.querySelector<HTMLTextAreaElement>("#composer")!;
+    const strategy = new TestStrategy();
+    await strategy.prepareSubmit({ document, window, timeoutMs: 100 });
+    original.id = "bound-composer";
+    const replacement = document.createElement("textarea");
+    replacement.id = "composer";
+    document.body.prepend(replacement);
+
+    await strategy.stagePrompt({ document, window, timeoutMs: 100 }, { text: "bound" });
+    expect(original.value).toBe("bound");
+    expect(replacement.value).toBe("");
+  });
+
   it("stages content, waits for the enabled control, and can roll it back without clicking", async () => {
     document.body.innerHTML = `
       <textarea id="composer"></textarea>

@@ -65,6 +65,15 @@ export interface ResponseCaptureUpdate {
   readonly message?: string;
 }
 
+export interface ComposerCandidateDiagnostic {
+  readonly descriptor: string;
+  readonly score: number;
+  readonly normalizedLength: number;
+  readonly selected: boolean;
+  readonly eligible: boolean;
+  readonly reason?: "hidden" | "disabled" | "readonly" | "search" | "not-editable";
+}
+
 export interface ProviderStrategy {
   readonly definition: ProviderDefinition;
   probe(ctx: FrameContext): Promise<ProbeResult>;
@@ -83,6 +92,7 @@ export interface ProviderStrategy {
     onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
   ): Promise<ResponseCaptureUpdate>;
   startNewConversation(ctx: FrameContext): Promise<void>;
+  diagnoseComposerCandidates?(ctx: FrameContext): readonly ComposerCandidateDiagnostic[];
 }
 
 export interface ProviderPlugin {

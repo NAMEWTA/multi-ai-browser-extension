@@ -12,10 +12,12 @@ import {
   findAllUsable,
   findFirstUsable,
   findUsableByText,
+  isElementUsable,
   normalizeComposerValue,
   readComposerValue,
   waitForCondition,
   waitForElement,
+  waitForResolvedElement,
 } from "./dom";
 import { ProviderError } from "./errors";
 import { ButtonSubmitter } from "./submitters/button-submitter";
@@ -33,7 +35,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   ) {}
 
   async probe(ctx: FrameContext): Promise<ProbeResult> {
-    if (findFirstUsable(ctx.document, this.selectors.composer)) return { status: "ready" };
+    if (this.findComposer(ctx.document)) return { status: "ready" };
     if (this.selectors.login && findFirstUsable(ctx.document, this.selectors.login)) {
       return { status: "needs-login", detail: "请先在官方网站完成登录" };
     }
@@ -45,34 +47,29 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     if (probe.status === "needs-login") {
       throw new ProviderError("LOGIN_REQUIRED", probe.detail ?? "需要登录");
     }
-    await waitForElement(ctx.document, this.selectors.composer, {
-      signal: ctx.signal,
-      timeoutMs: ctx.timeoutMs,
-    });
+    await this.waitForComposer(ctx);
   }
 
   async prepareSubmit(ctx: FrameContext): Promise<ResponseBaseline> {
+    this.activeComposer = undefined;
+    this.stagedSubmitControl = undefined;
     await this.waitUntilReady(ctx);
-    const composer = await waitForElement(ctx.document, this.selectors.composer, {
-      signal: ctx.signal,
-      timeoutMs: ctx.timeoutMs,
-    });
+    const composer = await this.waitForComposer(ctx);
     if (normalizeComposerValue(readComposerValue(composer))) {
       throw new ProviderError("COMPOSER_NOT_EMPTY", "官网输入框已有未发送内容，请先清空后重试");
     }
     if (this.selectors.generating && findFirstUsable(ctx.document, this.selectors.generating)) {
       throw new ProviderError("PROVIDER_BUSY", "官网仍在生成上一条回复，请等待完成后重试");
     }
-    this.activeComposer = undefined;
-    this.stagedSubmitControl = undefined;
+    this.activeComposer = composer;
     return this.responseBaseline(ctx.document);
   }
 
   async writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void> {
-    const composer = await waitForElement(ctx.document, this.selectors.composer, {
-      signal: ctx.signal,
-      timeoutMs: ctx.timeoutMs,
-    });
+    const composer = this.activeComposer ?? (await this.waitForComposer(ctx));
+    if (!composer.isConnected || !isElementUsable(composer)) {
+      throw new ProviderError("COMPOSER_NOT_READY", "预检选定的官网输入框已被页面替换，请重新发送");
+    }
     this.writer.write(composer, prompt.text);
     this.activeComposer = composer;
   }
@@ -203,7 +200,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     button.click();
     await waitForCondition(
       () => {
-        const composer = findFirstUsable(ctx.document, this.selectors.composer);
+        const composer = this.findComposer(ctx.document);
         if (!composer || normalizeComposerValue(readComposerValue(composer))) return false;
         return (
           ctx.window.location.href !== urlBefore ||
@@ -223,6 +220,17 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
 
   protected validateStagedSubmitControl(button: HTMLElement): void {
     void button;
+  }
+
+  protected findComposer(document: Document): HTMLElement | undefined {
+    return findFirstUsable(document, this.selectors.composer);
+  }
+
+  protected async waitForComposer(ctx: FrameContext): Promise<HTMLElement> {
+    return await waitForResolvedElement(ctx.document, () => this.findComposer(ctx.document), {
+      signal: ctx.signal,
+      timeoutMs: ctx.timeoutMs,
+    });
   }
 
   protected responseBaseline(document: Document): ResponseBaseline {

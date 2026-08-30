@@ -204,7 +204,7 @@ textarea:focus-visible {
 .history-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 28px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   margin-bottom: 3px;
   border-radius: 8px;
@@ -249,7 +249,14 @@ textarea:focus-visible {
   font-size: 9px;
 }
 
-.history-delete {
+.history-row-actions {
+  display: flex;
+  align-items: center;
+  padding-right: 3px;
+  opacity: 0;
+}
+
+.history-action {
   display: grid;
   width: 26px;
   height: 26px;
@@ -260,13 +267,27 @@ textarea:focus-visible {
   opacity: 0;
 }
 
-.history-row:hover .history-delete,
-.history-row.active .history-delete {
+.history-row:hover .history-row-actions,
+.history-row.active .history-row-actions {
   opacity: 1;
 }
 
-.history-delete:hover {
+.history-row:hover .history-action,
+.history-row.active .history-action {
+  opacity: 1;
+}
+
+.history-action:hover {
   background: #fff;
+  color: var(--text);
+}
+
+.history-action.is-pinned {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.history-action.action-danger:hover {
   color: var(--danger);
 }
 
@@ -372,6 +393,56 @@ textarea:focus-visible {
   align-items: center;
   justify-self: end;
   gap: 7px;
+}
+
+.action-menu {
+  position: relative;
+  display: inline-grid;
+}
+
+.action-menu-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  display: grid;
+  width: 220px;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 14px 38px rgb(20 28 45 / 18%);
+}
+
+.action-menu-popover.align-end {
+  right: 0;
+}
+
+.action-menu-popover.align-start {
+  left: 0;
+}
+
+.action-menu-popover > button,
+.panel-actions .action-menu-popover > button,
+.history-detail > header .action-menu-popover > button {
+  display: grid;
+  width: 100%;
+  height: 34px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  justify-items: start;
+  gap: 7px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: transparent;
+  color: #424a55;
+  font-size: 10px;
+  text-align: left;
+}
+
+.action-menu-popover > button:hover:not(:disabled) {
+  background: var(--surface-muted);
+  color: var(--text);
 }
 
 .add-provider:hover {
@@ -799,6 +870,10 @@ textarea:focus-visible {
   align-items: center;
 }
 
+.panel-actions .action-menu {
+  z-index: 6;
+}
+
 .panel-actions button {
   width: 28px;
   height: 28px;
@@ -1020,17 +1095,19 @@ textarea:focus-visible {
 
 .detail-backdrop {
   z-index: 30;
-  justify-items: end;
-  padding: 0;
+  padding: 24px;
 }
 
 .history-detail {
   display: grid;
-  width: min(440px, 92vw);
-  height: 100%;
+  width: min(920px, 96vw);
+  max-height: min(820px, 92vh);
   grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: #fff;
-  box-shadow: -16px 0 50px rgb(20 28 45 / 18%);
+  box-shadow: 0 24px 70px rgb(20 28 45 / 22%);
 }
 
 .history-detail > header {
@@ -1054,6 +1131,12 @@ textarea:focus-visible {
 .history-detail > header span {
   color: var(--text-muted);
   font-size: 9px;
+}
+
+.history-detail > header .history-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
 }
 
 .detail-content {
@@ -1100,6 +1183,8 @@ textarea:focus-visible {
 }
 
 .turn-prompt {
+  width: min(78%, 680px);
+  justify-self: end;
   padding: 10px 11px;
   border-radius: 8px;
   background: #f1f4ff;
@@ -1123,6 +1208,30 @@ textarea:focus-visible {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.workspace-notice {
+  position: fixed;
+  z-index: 70;
+  right: 18px;
+  bottom: 18px;
+  max-width: min(360px, calc(100vw - 36px));
+  padding: 10px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-float);
+  font-size: 10px;
+}
+
+.workspace-notice.notice-success {
+  border-color: #a9d7c4;
+  color: #116742;
+}
+
+.workspace-notice.notice-error {
+  border-color: #efb5b5;
+  color: var(--danger);
 }
 
 .exchange-record > header strong {

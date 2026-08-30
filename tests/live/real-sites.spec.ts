@@ -110,40 +110,91 @@ test("keeps a draft out of the real Kimi Lexical editor before sending", async (
   await expect(composer).toBeFocused();
 });
 
-test("routes a prompt to a real ready website frame", async () => {
-  const panels = workspace.locator("article.provider-panel");
-  await expect
-    .poll(
-      async () => {
-        const statuses = await panels.locator(".panel-status").allTextContents();
-        return statuses.filter((status) => status.trim() === "就绪").length;
-      },
-      { timeout: 45_000 },
+test("connects the real Qwen composer without leaking the workspace draft", async () => {
+  const prompt = "【千问官网草稿隔离验收】这段文字不会提前写入官网";
+  const sessionId = crypto.randomUUID();
+  const turnId = crypto.randomUUID();
+  const qwenPanel = workspace.locator("article.provider-panel[data-provider='qwen']");
+  const qwenFrame = qwenPanel.locator("iframe").contentFrame();
+  const nativeComposer = qwenFrame
+    .locator(
+      "textarea#chat-input, [data-slate-editor='true'][contenteditable='true'], [role='textbox'][contenteditable='true'], textarea[placeholder*='千问'], textarea[placeholder*='问']",
     )
-    .toBeGreaterThan(0);
+    .first();
+  const composerAvailable = await nativeComposer
+    .waitFor({ state: "visible", timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+  test.skip(!composerAvailable, "隔离浏览器中的千问未登录营销页不提供聊天输入框");
+  const realFrame = workspace
+    .frames()
+    .find((candidate) => isExpectedSite(candidate.url(), "www.qianwen.com"));
+  const diagnostic = {
+    url: realFrame?.url(),
+    windowName: await realFrame?.evaluate(() => window.name),
+    composer: await nativeComposer.evaluate((element) => ({
+      tagName: element.tagName.toLowerCase(),
+      id: element.id,
+      role: element.getAttribute("role"),
+      placeholder: element.getAttribute("placeholder"),
+      contenteditable: element.getAttribute("contenteditable"),
+      visibleTextLength: element.textContent?.trim().length ?? 0,
+    })),
+    status: await qwenPanel.locator(".panel-status").textContent(),
+    runtime: await readRuntimeSnapshot(),
+  };
+  await test.info().attach("qwen-bridge-diagnostic", {
+    body: JSON.stringify(diagnostic, null, 2),
+    contentType: "application/json",
+  });
+  const precheckRun = await sendDirectQwenCommand({
+    type: "PRECHECK_PROMPT",
+    panelId: "",
+    sessionId,
+    turnId,
+    prompt,
+  });
+  expect(precheckRun.result, JSON.stringify({ diagnostic, precheckRun })).toMatchObject({
+    status: "prechecked",
+  });
+  await sendDirectQwenCommand({
+    type: "ROLLBACK_PROMPT",
+    panelId: "",
+    sessionId,
+    turnId,
+    prompt,
+  });
 
-  const readyPanel = panels.filter({ has: workspace.locator(".status-ready") }).first();
-  const provider = await readyPanel.getAttribute("data-provider");
-  await selectOnlyTarget(provider!);
+  const composer = workspace.locator(".global-composer textarea");
+  await composer.fill(prompt);
+  await workspace.waitForTimeout(1_500);
+  const nativeValue = await nativeComposer.evaluate((element) =>
+    element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement
+      ? element.value
+      : element.textContent,
+  );
+  expect(nativeValue).not.toContain(prompt);
+  await expect(composer).toBeFocused();
+  await composer.fill("");
+});
+
+test("routes a prompt to a real ready website frame", async () => {
+  const readyPanel = workspace.locator("article.provider-panel[data-provider='qwen']");
+  await expect(readyPanel.locator(".panel-status.status-ready")).toBeVisible({ timeout: 45_000 });
+  await selectOnlyTarget("qwen");
 
   await workspace
     .locator(".global-composer textarea")
     .fill("【官网路由验收】请只回复：网页统一提问正常");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
 
-  await expect(readyPanel.locator(".panel-status")).not.toContainText("失败", { timeout: 30_000 });
+  await expect
+    .poll(() => readyPanel.locator(".panel-status").textContent(), { timeout: 30_000 })
+    .toMatch(/已发送|失败/);
+  await expect(readyPanel.locator(".panel-status")).toContainText("已发送");
   await expect(workspace.locator(".history-list")).toContainText("官网路由验收");
 
-  const runtimeSnapshot = await worker.evaluate(async () => {
-    const runtime = globalThis as typeof globalThis & {
-      chrome: {
-        storage: {
-          session: { get(key: string): Promise<Record<string, unknown>> };
-        };
-      };
-    };
-    return await runtime.chrome.storage.session.get("runtime-snapshot-v1");
-  });
+  const runtimeSnapshot = await readRuntimeSnapshot();
   await test.info().attach("runtime-snapshot", {
     body: JSON.stringify(runtimeSnapshot, null, 2),
     contentType: "application/json",
@@ -155,6 +206,55 @@ function isExpectedSite(url: string, expectedHost: string): boolean {
   const finalHost = new URL(url).hostname;
   const baseDomain = expectedHost.split(".").slice(-2).join(".");
   return finalHost === expectedHost || finalHost.endsWith(`.${baseDomain}`);
+}
+
+async function readRuntimeSnapshot(): Promise<Record<string, unknown>> {
+  return await worker.evaluate(async () => {
+    const runtime = globalThis as typeof globalThis & {
+      chrome: {
+        storage: {
+          session: { get(key: string): Promise<Record<string, unknown>> };
+        };
+      };
+    };
+    return await runtime.chrome.storage.session.get("runtime-snapshot-v1");
+  });
+}
+
+async function sendDirectQwenCommand(
+  command: Record<string, unknown>,
+): Promise<{ result: unknown; diagnostics: Record<string, unknown> }> {
+  return await worker.evaluate(async (rawCommand) => {
+    const runtime = globalThis as typeof globalThis & {
+      chrome: {
+        storage: {
+          session: { get(key: string): Promise<Record<string, unknown>> };
+        };
+        tabs: {
+          sendMessage(
+            tabId: number,
+            message: unknown,
+            options: { frameId: number },
+          ): Promise<unknown>;
+        };
+      };
+    };
+    const stored = await runtime.chrome.storage.session.get("runtime-snapshot-v1");
+    const snapshot = stored["runtime-snapshot-v1"] as {
+      frames?: Array<{ frameId: number; panelId: string; providerId: string; tabId: number }>;
+    };
+    const frame = snapshot.frames?.find((candidate) => candidate.providerId === "qwen");
+    if (!frame) throw new Error("千问 iframe 尚未注册");
+    const result = await runtime.chrome.tabs.sendMessage(
+      frame.tabId,
+      { ...rawCommand, panelId: frame.panelId },
+      { frameId: frame.frameId },
+    );
+    const diagnostics = await runtime.chrome.storage.session.get(
+      `provider-diagnostics-v1:${frame.panelId}`,
+    );
+    return { result, diagnostics };
+  }, command);
 }
 
 async function selectOnlyTarget(providerId: string): Promise<void> {

@@ -4,14 +4,19 @@ import {
   ArrowRight,
   ChevronDown,
   Columns3,
+  Copy,
   Download,
   ExternalLink,
+  FileDown,
   Grid2X2,
   History,
   Maximize2,
+  MessageSquareText,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   Search,
@@ -30,6 +35,14 @@ import {
 } from "../../core/messaging/protocol";
 import { providerRegistry } from "../../core/providers/registry";
 import type { ProviderDefinition } from "../../core/providers/contracts";
+import {
+  createLatestTurnTranscript,
+  createOpenProvidersConversationTranscript,
+  createProviderConversationTranscript,
+  createProviderLatestExchangeTranscript,
+  createSessionTranscript,
+  type MarkdownTranscriptArtifact,
+} from "../../core/transcript";
 import type {
   ExchangeResponseStatus,
   ProviderExchangeRecord,
@@ -44,8 +57,8 @@ import {
   getActiveSession,
   getSessionDetail,
   listSessions,
-  migrateLegacyHistory,
   recordSuccessfulTurn,
+  setSessionPinned,
   updateSessionWorkspaceSnapshot,
   type BufferedResponseUpdate,
   type SessionDetail,
@@ -56,9 +69,12 @@ import {
   importHistoryJsonl,
   MAX_HISTORY_IMPORT_BYTES,
 } from "../../db/history-transfer";
+import { ActionMenu } from "./action-menu";
+import { copyText, downloadMarkdown } from "./text-transfer";
 import { useWorkspaceStore, type WorkspacePanel } from "./workspace-store";
 
 let workspaceSessionBootstrap: Promise<SessionRecord> | undefined;
+type ProviderTranscriptAction = "latest" | "all" | "download";
 
 export function WorkspaceApp() {
   const panels = useWorkspaceStore((state) => state.panels);
@@ -81,6 +97,7 @@ export function WorkspaceApp() {
   const [history, setHistory] = useState<SessionRecord[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [details, setDetails] = useState<SessionDetail>();
+  const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string }>();
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [switchingSession, setSwitchingSession] = useState(false);
   const [runtimeReady, setRuntimeReady] = useState(false);
@@ -91,6 +108,12 @@ export function WorkspaceApp() {
   const responseBufferRef = useRef(
     new Map<string, Map<string, Omit<ProviderResponseUpdate, "type">>>(),
   );
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(undefined), 3_000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
 
   const refreshHistory = useCallback(async () => {
     setHistory(await listSessions());
@@ -149,7 +172,8 @@ export function WorkspaceApp() {
           current &&
           current.status !== "loading" &&
           current.status !== "needs-login" &&
-          current.status !== "blocked"
+          current.status !== "blocked" &&
+          current.status !== "unavailable"
         ) {
           return { ok: true };
         }
@@ -204,7 +228,7 @@ export function WorkspaceApp() {
     return history.filter(
       (record) =>
         record.title.toLocaleLowerCase().includes(query) ||
-        record.status.toLocaleLowerCase().includes(query),
+        (record.source === "imported" ? "已导入" : "本地会话").includes(query),
     );
   }, [history, historyQuery]);
 
@@ -339,6 +363,84 @@ export function WorkspaceApp() {
     setDetails(await getSessionDetail(record.id));
   }
 
+  async function togglePinned(record: SessionRecord) {
+    await setSessionPinned(record.id, !record.pinnedAt);
+    await refreshHistory();
+  }
+
+  async function activeSessionDetail(): Promise<SessionDetail> {
+    if (!activeSessionId) throw new Error("当前没有活动会话");
+    const detail = await getSessionDetail(activeSessionId);
+    if (!detail) throw new Error("当前会话不存在");
+    return detail;
+  }
+
+  async function transferTranscript(
+    createArtifact: () => Promise<MarkdownTranscriptArtifact> | MarkdownTranscriptArtifact,
+    mode: "copy" | "download",
+    successMessage: string,
+  ) {
+    try {
+      const artifact = await createArtifact();
+      if (mode === "copy") await copyText(artifact.text);
+      else downloadMarkdown(artifact.text, artifact.filename);
+      setNotice({ tone: "success", message: successMessage });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "会话转录失败",
+      });
+    }
+  }
+
+  async function handleWorkspaceTranscript(action: "latest" | "all" | "download") {
+    const targets = useWorkspaceStore.getState().panels.map((panel) => ({
+      panelId: panel.id,
+      providerId: panel.providerId,
+    }));
+    await transferTranscript(
+      async () => {
+        const detail = await activeSessionDetail();
+        return action === "latest"
+          ? createLatestTurnTranscript(detail, { targets })
+          : createOpenProvidersConversationTranscript(detail, targets);
+      },
+      action === "download" ? "download" : "copy",
+      action === "latest"
+        ? "已复制当前网页的最近一轮回复"
+        : action === "download"
+          ? "已下载当前任务 Markdown"
+          : "已复制当前任务完整会话",
+    );
+  }
+
+  async function handleProviderTranscript(panel: WorkspacePanel, action: ProviderTranscriptAction) {
+    const target = { panelId: panel.id, providerId: panel.providerId };
+    const providerName = providerRegistry.get(panel.providerId).definition.name;
+    await transferTranscript(
+      async () => {
+        const detail = await activeSessionDetail();
+        return action === "latest"
+          ? createProviderLatestExchangeTranscript(detail, target)
+          : createProviderConversationTranscript(detail, target);
+      },
+      action === "download" ? "download" : "copy",
+      action === "latest"
+        ? `已复制 ${providerName} 最近一次问答`
+        : action === "download"
+          ? `已下载 ${providerName} 会话 Markdown`
+          : `已复制 ${providerName} 完整会话`,
+    );
+  }
+
+  async function handleDetailTranscript(detail: SessionDetail, mode: "copy" | "download") {
+    await transferTranscript(
+      () => createSessionTranscript(detail),
+      mode,
+      mode === "copy" ? "已复制完整会话" : "已下载会话 Markdown",
+    );
+  }
+
   async function removeHistory(record: SessionRecord) {
     if (!window.confirm("删除这个会话及其全部问答记录？")) return;
     await deleteSession(record.id);
@@ -451,28 +553,37 @@ export function WorkspaceApp() {
                     onClick={() => void switchHistory(record)}
                   >
                     <span>{record.title}</span>
-                    <small>
-                      {sessionStatusLabel(record.status)} · {formatTime(record.updatedAt)}
-                    </small>
+                    <small>{formatTime(record.contentUpdatedAt)}</small>
                   </button>
-                  <button
-                    className="history-delete"
-                    type="button"
-                    title="查看对话记录"
-                    aria-label="查看对话记录"
-                    onClick={() => void openHistory(record)}
-                  >
-                    <History size={14} />
-                  </button>
-                  <button
-                    className="history-delete"
-                    type="button"
-                    title="删除记录"
-                    aria-label="删除记录"
-                    onClick={() => void removeHistory(record)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="history-row-actions">
+                    <button
+                      className={`history-action ${record.pinnedAt ? "is-pinned" : ""}`}
+                      type="button"
+                      title={record.pinnedAt ? "取消置顶" : "置顶会话"}
+                      aria-label={record.pinnedAt ? "取消置顶" : "置顶会话"}
+                      onClick={() => void togglePinned(record)}
+                    >
+                      {record.pinnedAt ? <PinOff size={14} /> : <Pin size={14} />}
+                    </button>
+                    <button
+                      className="history-action"
+                      type="button"
+                      title="查看统一对话"
+                      aria-label="查看对话记录"
+                      onClick={() => void openHistory(record)}
+                    >
+                      <MessageSquareText size={14} />
+                    </button>
+                    <button
+                      className="history-action action-danger"
+                      type="button"
+                      title="删除会话"
+                      aria-label="删除记录"
+                      onClick={() => void removeHistory(record)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
               ))
             ) : (
@@ -547,6 +658,33 @@ export function WorkspaceApp() {
             </button>
           </div>
           <div className="toolbar-actions">
+            <ActionMenu
+              label="复制或下载当前任务"
+              icon={<Copy size={16} />}
+              items={[
+                {
+                  id: "latest",
+                  label: "复制所有站点最近一轮",
+                  icon: <MessageSquareText size={15} />,
+                  disabled: !activeSessionId || panels.length === 0,
+                  onSelect: () => handleWorkspaceTranscript("latest"),
+                },
+                {
+                  id: "all",
+                  label: "复制所有站点完整会话",
+                  icon: <Copy size={15} />,
+                  disabled: !activeSessionId || panels.length === 0,
+                  onSelect: () => handleWorkspaceTranscript("all"),
+                },
+                {
+                  id: "download",
+                  label: "下载当前任务 Markdown",
+                  icon: <FileDown size={15} />,
+                  disabled: !activeSessionId || panels.length === 0,
+                  onSelect: () => handleWorkspaceTranscript("download"),
+                },
+              ]}
+            />
             <button
               className="icon-button"
               type="button"
@@ -638,13 +776,25 @@ export function WorkspaceApp() {
               onMaximize={(panelId) =>
                 setMaximized(activeMaximized === panelId ? undefined : panelId)
               }
+              onTranscript={(panel, action) => void handleProviderTranscript(panel, action)}
             />
           )}
         </main>
       </section>
 
       {pickerOpen && <ProviderPicker onClose={() => setPickerOpen(false)} />}
-      {details && <SessionHistoryDetail detail={details} onClose={() => setDetails(undefined)} />}
+      {details && (
+        <SessionHistoryDetail
+          detail={details}
+          onClose={() => setDetails(undefined)}
+          onTransfer={(mode) => void handleDetailTranscript(details, mode)}
+        />
+      )}
+      {notice && (
+        <div className={`workspace-notice notice-${notice.tone}`} role="status" aria-live="polite">
+          {notice.message}
+        </div>
+      )}
     </div>
   );
 }
@@ -654,11 +804,13 @@ function PanelLayout({
   layoutMode,
   maximized,
   onMaximize,
+  onTranscript,
 }: {
   panels: WorkspacePanel[];
   layoutMode: "tiles" | "adaptive";
   maximized: string | undefined;
   onMaximize(panelId: string): void;
+  onTranscript(panel: WorkspacePanel, action: ProviderTranscriptAction): void;
 }) {
   const persistedRatios = useWorkspaceStore((state) => state.tileRatios);
   const setTileRatios = useWorkspaceStore((state) => state.setTileRatios);
@@ -735,6 +887,7 @@ function PanelLayout({
             maximized={panel.id === maximized}
             hidden={Boolean(maximized && panel.id !== maximized)}
             onMaximize={() => onMaximize(panel.id)}
+            onTranscript={(action) => onTranscript(panel, action)}
           />
           {layoutMode === "tiles" && !maximized && index < panels.length - 1 && (
             <div
@@ -916,6 +1069,7 @@ function ProviderPanel({
   maximized,
   hidden,
   onMaximize,
+  onTranscript,
 }: {
   panel: WorkspacePanel;
   index: number;
@@ -923,6 +1077,7 @@ function ProviderPanel({
   maximized: boolean;
   hidden: boolean;
   onMaximize(): void;
+  onTranscript(action: ProviderTranscriptAction): void;
 }) {
   const definition = providerRegistry.get(panel.providerId).definition;
   const movePanel = useWorkspaceStore((state) => state.movePanel);
@@ -982,6 +1137,30 @@ function ProviderPanel({
           >
             {maximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </button>
+          <ActionMenu
+            label={`复制 ${definition.name} 会话`}
+            icon={<Copy size={15} />}
+            items={[
+              {
+                id: "latest",
+                label: "复制最后一次问答",
+                icon: <MessageSquareText size={14} />,
+                onSelect: () => onTranscript("latest"),
+              },
+              {
+                id: "all",
+                label: "复制完整会话",
+                icon: <Copy size={14} />,
+                onSelect: () => onTranscript("all"),
+              },
+              {
+                id: "download",
+                label: "下载 Markdown",
+                icon: <FileDown size={14} />,
+                onSelect: () => onTranscript("download"),
+              },
+            ]}
+          />
           <button
             type="button"
             title="在普通标签页打开"
@@ -1132,10 +1311,18 @@ function ProviderPicker({ onClose }: { onClose(): void }) {
   );
 }
 
-function SessionHistoryDetail({ detail, onClose }: { detail: SessionDetail; onClose(): void }) {
+function SessionHistoryDetail({
+  detail,
+  onClose,
+  onTransfer,
+}: {
+  detail: SessionDetail;
+  onClose(): void;
+  onTransfer(mode: "copy" | "download"): void;
+}) {
   return (
     <div className="detail-backdrop" role="presentation" onMouseDown={onClose}>
-      <aside
+      <section
         className="history-detail"
         role="dialog"
         aria-modal="true"
@@ -1149,9 +1336,29 @@ function SessionHistoryDetail({ detail, onClose }: { detail: SessionDetail; onCl
               {detail.turns.length} 轮问答 · {formatFullTime(detail.session.createdAt)}
             </span>
           </div>
-          <button type="button" title="关闭" aria-label="关闭" onClick={onClose}>
-            <X size={17} />
-          </button>
+          <div className="history-detail-actions">
+            <ActionMenu
+              label="复制或下载完整会话"
+              icon={<Copy size={16} />}
+              items={[
+                {
+                  id: "copy",
+                  label: "复制完整会话",
+                  icon: <Copy size={14} />,
+                  onSelect: () => onTransfer("copy"),
+                },
+                {
+                  id: "download",
+                  label: "下载 Markdown",
+                  icon: <FileDown size={14} />,
+                  onSelect: () => onTransfer("download"),
+                },
+              ]}
+            />
+            <button type="button" title="关闭" aria-label="关闭" onClick={onClose}>
+              <X size={17} />
+            </button>
+          </div>
         </header>
         <div className="detail-content session-timeline">
           {detail.turns.map(({ turn, exchanges }) => (
@@ -1193,7 +1400,7 @@ function SessionHistoryDetail({ detail, onClose }: { detail: SessionDetail; onCl
           ))}
           {detail.turns.length === 0 && <p className="history-notice">这个会话还没有发送内容。</p>}
         </div>
-      </aside>
+      </section>
     </div>
   );
 }
@@ -1215,7 +1422,6 @@ function captureWorkspaceSnapshot(): SessionWorkspaceSnapshot {
 }
 
 async function bootstrapWorkspaceSession(): Promise<SessionRecord> {
-  await migrateLegacyHistory();
   const active = await getActiveSession();
   if (!active) {
     return await createSession("", crypto.randomUUID(), captureWorkspaceSnapshot());
@@ -1285,10 +1491,6 @@ function statusLabel(status: WorkspacePanel["status"]): string {
     error: "失败",
     unavailable: "未连接",
   }[status];
-}
-
-function sessionStatusLabel(status: SessionRecord["status"]): string {
-  return { active: "当前会话", archived: "已归档", imported: "已导入" }[status];
 }
 
 function turnStatusLabel(status: SessionDetail["turns"][number]["turn"]["status"]): string {
