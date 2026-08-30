@@ -23,8 +23,8 @@ MV3 Service Worker
 Provider Content Scripts
   ├─ probe page state
   ├─ locate native composer
-  ├─ write and verify text
-  └─ submit once and report result
+  ├─ write and asynchronously verify text
+  └─ submit once, confirm site state and report result
 ```
 
 ## 2. 浏览器事实与约束
@@ -121,14 +121,21 @@ needs-login  blocked  sync-error  submit-error  unavailable
 
 状态转换由事件驱动，不用多个互相矛盾的布尔值表达。面板错误不改变其他面板状态。
 
-### 5.3 同步节流
+### 5.3 同步节流与焦点
 
-- 输入变化以 120ms trailing debounce 广播。
+- 输入变化以 700ms trailing debounce 广播，避免富文本网页在连续输入期间反复抢占焦点。
 - 每个面板只保留最新 `revision`，丢弃过期写入。
 - IME composition 期间不广播，`compositionend` 后立即同步。
-- 同步写入不得调用 Provider 输入框的 `focus()`；全局输入期间焦点必须始终留在工作台输入框。
+- 原生 textarea/input 通过 setter 和事件无焦点写入；Kimi Lexical 等受控富文本编辑器允许在闲置同步事务中短暂聚焦。
+- 工作台在同步前保存全局输入框的焦点、selectionStart 和 selectionEnd，并在最新 revision 完成后恢复；过期任务不得恢复旧选区。
 - Provider 收到发送命令后再次写入并回读最终文本，再触发该网页的一次原生提交。
 - 用户可在面板内手动修改；下一次全局输入会明确覆盖当前启用面板的输入内容。
+
+### 5.4 原生网页尺寸
+
+- iframe 始终以面板的原生 CSS 像素尺寸渲染，禁止对整个第三方页面使用自动 `transform: scale()`。
+- 分栏面板最小宽度为 720px；容器不足时工作区横向滚动，不对官网进行小数比例栅格化。
+- 后续若提供缩放，只能是用户显式选择的离散级别，并需逐站验证，不得由 `ResizeObserver` 自动反馈计算。
 
 ## 6. Provider 设计模式
 
@@ -138,7 +145,7 @@ needs-login  blocked  sync-error  submit-error  unavailable
 
 ### 6.2 Template Method
 
-`BaseDomStrategy` 固化稳定流程：探测页面、等待就绪、查找可见输入框、聚焦、通过原生 setter 写入、派发输入事件、回读验证、查找可用发送按钮、点击、验证提交。
+`BaseDomStrategy` 固化稳定流程：探测页面、等待就绪、查找可见输入框、写入、回读验证、查找语义明确的可用发送按钮、点击并等待站点状态确认。Kimi Strategy 覆写写入步骤，通过原生编辑命令与异步轮询适配 Lexical，禁止直接替换其 DOM 子节点。
 
 ### 6.3 Strategy + Composition
 
@@ -184,6 +191,8 @@ interface SendRecord {
 
 不申请 `cookies`，不申请 `<all_urls>` 必选权限，不上传提示词、历史或网页内容。Chrome Web Store 仍要求披露本地处理的表单内容、网页内容和浏览活动。
 
+诊断日志只保存在 `chrome.storage.session` 的有界环形记录中，字段限于站点、面板、URL、元素指纹、操作阶段、提示词长度、耗时和错误码。禁止记录提示词正文、Cookie、回答正文、请求体或响应体；用户可从工作台手动导出 JSON。
+
 ## 9. 测试策略
 
 | 层级        | 验证内容                                             |
@@ -191,7 +200,7 @@ interface SendRecord {
 | 单元测试    | 协议、幂等、并发隔离、DOM writer、selector、历史迁移 |
 | DOM fixture | 每个 Provider 的输入、回读、发送与错误状态           |
 | 扩展 E2E    | 分栏、同步但不发送、统一发送、单站追问、历史、恢复   |
-| 视觉测试    | 1280/1440/1920/2560 宽度、1/2/3/6 面板、侧栏开关     |
+| 视觉测试    | 1280/1440/1920/2560 宽度、原生 scale、尺寸稳定性     |
 | 真实 smoke  | 登录态、最终 URL、输入同步、一次发送、降级结果       |
 
 Mock E2E 只能证明扩展编排正确，不能证明真实站点可用。真实发送测试必须使用专用测试账号、无敏感提示词并控制频率。

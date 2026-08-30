@@ -10,11 +10,9 @@ export const deepseekSelectors = {
     "div[contenteditable='true']",
   ],
   submit: [
-    "button[aria-label*='发送']",
-    "button[aria-label*='Send']",
-    "button[type='submit']",
-    "button.ds-icon-button:not([aria-disabled='true'])",
-    ".ds-icon-button[role='button']:not([aria-disabled='true'])",
+    "button[aria-label*='发送']:not(:disabled):not([aria-disabled='true'])",
+    "button[aria-label*='Send']:not(:disabled):not([aria-disabled='true'])",
+    "button[type='submit']:not(:disabled):not([aria-disabled='true'])",
   ],
   login: [
     "a[href*='login']",

@@ -1,4 +1,4 @@
-import { dispatchInputEvents, readComposerValue } from "../dom";
+import { dispatchInputEvents, normalizeComposerValue, readComposerValue } from "../dom";
 import { ProviderError } from "../errors";
 
 export interface ComposerWriter {
@@ -56,12 +56,8 @@ export class CompositeComposerWriter {
       throw new ProviderError("COMPOSER_NOT_READY", "当前输入框类型暂不支持");
     }
     writer.write(element, text);
-    if (normalizeText(readComposerValue(element)) !== normalizeText(text)) {
+    if (normalizeComposerValue(readComposerValue(element)) !== normalizeComposerValue(text)) {
       throw new ProviderError("PROMPT_MISMATCH", "网页输入框内容校验失败");
     }
   }
-}
-
-function normalizeText(value: string): string {
-  return value.replace(/\r\n/g, "\n").trim();
 }

@@ -93,6 +93,26 @@ test("loads the seven configured real AI websites without test interception", as
   await workspace.screenshot({ path: "test-results/live-sites-1440x900.png" });
 });
 
+test("synchronizes into the real Kimi Lexical editor without sending", async () => {
+  const prompt = "【官网同步验收】这段文字不会发送";
+  const kimiPanel = workspace.locator("article.provider-panel[data-provider='kimi']");
+  await expect(kimiPanel.locator(".panel-status.status-ready")).toBeVisible({ timeout: 45_000 });
+  for (const panel of await workspace.locator("article.provider-panel").all()) {
+    const checkbox = panel.getByRole("checkbox");
+    const shouldEnable = (await panel.getAttribute("data-provider")) === "kimi";
+    if ((await checkbox.isChecked()) !== shouldEnable) await checkbox.setChecked(shouldEnable);
+  }
+
+  const composer = workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页");
+  await composer.fill(prompt);
+  await expect(composer).toBeFocused();
+  const kimiFrame = kimiPanel.locator("iframe").contentFrame();
+  await expect(
+    kimiFrame.locator("[data-lexical-editor='true'].chat-input-editor").first(),
+  ).toContainText(prompt, { timeout: 15_000 });
+  await expect(composer).toBeFocused();
+});
+
 test("routes a prompt to a real ready website frame", async () => {
   const panels = workspace.locator("article.provider-panel");
   await expect

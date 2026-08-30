@@ -103,3 +103,23 @@ export function dispatchInputEvents(element: HTMLElement, text: string): void {
   element.dispatchEvent(inputEvent);
   element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 }
+
+export async function waitForCondition(
+  check: () => boolean,
+  options: { signal?: AbortSignal; timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const intervalMs = options.intervalMs ?? 50;
+  const startedAt = Date.now();
+  while (!check()) {
+    if (options.signal?.aborted) throw new ProviderError("ABORTED", "页面操作已取消");
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new ProviderError("TIMEOUT", `等待页面状态更新超时（${timeoutMs}ms）`);
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, intervalMs));
+  }
+}
+
+export function normalizeComposerValue(value: string): string {
+  return value.replace(/\r\n/g, "\n").trim();
+}

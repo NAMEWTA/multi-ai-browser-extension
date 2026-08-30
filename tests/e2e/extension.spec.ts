@@ -250,6 +250,26 @@ test("renders stable rounded workbench layouts without page overflow", async () 
   await workspace.screenshot({ path: "test-results/workspace-v3-1440x900.png", fullPage: true });
 });
 
+test("renders provider frames at a stable native scale", async () => {
+  const frame = workspace.locator("article.provider-panel iframe").first();
+  const samples: Array<{ width: number; height: number; transform: string }> = [];
+  for (let index = 0; index < 30; index += 1) {
+    samples.push(
+      await frame.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          width: rect.width,
+          height: rect.height,
+          transform: getComputedStyle(element).transform,
+        };
+      }),
+    );
+    await workspace.waitForTimeout(16);
+  }
+  expect(new Set(samples.map((sample) => `${sample.width}:${sample.height}`)).size).toBe(1);
+  expect(new Set(samples.map((sample) => sample.transform))).toEqual(new Set(["none"]));
+});
+
 async function getSubmitCounts(page: Page): Promise<number[]> {
   const frames = page.locator("article.provider-panel iframe");
   const counts: number[] = [];
@@ -297,8 +317,13 @@ function mockProviderHtml(host: string): string {
       });
       for (const button of document.querySelectorAll('button, [role="button"]')) {
         button.addEventListener('click', () => {
+          const prompt = readPrompt();
           document.body.dataset.submitCount = String(Number(document.body.dataset.submitCount) + 1);
-          document.querySelector('[data-last-prompt]').textContent = readPrompt();
+          document.querySelector('[data-last-prompt]').textContent = prompt;
+          for (const composer of document.querySelectorAll('textarea, [contenteditable]')) {
+            if ('value' in composer) composer.value = '';
+            else composer.replaceChildren();
+          }
         });
       }
     </script>

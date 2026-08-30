@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   Columns3,
+  Download,
   ExternalLink,
   Grid2X2,
   History,
@@ -102,6 +103,9 @@ export function WorkspaceApp() {
       const targets = currentTargets();
       if (!targets.length) return;
       const revision = ++syncRevisionRef.current;
+      const restoreFocus = document.activeElement === inputRef.current;
+      const selectionStart = inputRef.current?.selectionStart ?? null;
+      const selectionEnd = inputRef.current?.selectionEnd ?? null;
       for (const target of targets) setPanelStatus(target.panelId, "syncing");
       void browser.runtime
         .sendMessage({ type: "WORKSPACE_SYNC", revision, prompt, targets })
@@ -114,8 +118,14 @@ export function WorkspaceApp() {
               result.message,
             );
           }
+          if (restoreFocus && inputRef.current) {
+            inputRef.current.focus({ preventScroll: true });
+            if (selectionStart !== null && selectionEnd !== null) {
+              inputRef.current.setSelectionRange(selectionStart, selectionEnd);
+            }
+          }
         });
-    }, 120);
+    }, 700);
     return () => window.clearTimeout(timer);
   }, [prompt, composing, enabledSignature, hydrated, runtimeReady, setPanelStatus]);
 
@@ -195,6 +205,22 @@ export function WorkspaceApp() {
     await deleteSendRecord(record.id);
     if (details?.id === record.id) setDetails(undefined);
     await refreshHistory();
+  }
+
+  async function exportDiagnostics() {
+    const stored = await browser.storage.session.get(null);
+    const diagnostics = Object.fromEntries(
+      Object.entries(stored).filter(([key]) => key.startsWith("provider-diagnostics-v1:")),
+    );
+    const blob = new Blob([JSON.stringify(diagnostics, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `multi-ai-diagnostics-${new Date().toISOString().replaceAll(":", "-")}.json`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   return (
@@ -316,10 +342,21 @@ export function WorkspaceApp() {
               <Grid2X2 size={16} />
             </button>
           </div>
-          <button className="add-provider" type="button" onClick={() => setPickerOpen(true)}>
-            <Plus size={17} />
-            添加站点
-          </button>
+          <div className="toolbar-actions">
+            <button
+              className="icon-button"
+              type="button"
+              title="导出诊断信息"
+              aria-label="导出诊断信息"
+              onClick={() => void exportDiagnostics()}
+            >
+              <Download size={16} />
+            </button>
+            <button className="add-provider" type="button" onClick={() => setPickerOpen(true)}>
+              <Plus size={17} />
+              添加站点
+            </button>
+          </div>
         </header>
 
         <section className="composer-band" aria-label="全局输入">
@@ -539,14 +576,10 @@ function ProviderPanel({
   );
 }
 
-const DESKTOP_VIEWPORT_WIDTH = 1280;
-const DEFAULT_DESKTOP_VIEWPORT_HEIGHT = 900;
-
 function ProviderViewport({
   panelId,
   providerName,
   url,
-  maximized,
   onConnectionTimeout,
 }: {
   panelId: string;
@@ -555,57 +588,16 @@ function ProviderViewport({
   maximized: boolean;
   onConnectionTimeout(): void;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState({ scale: 1, height: DEFAULT_DESKTOP_VIEWPORT_HEIGHT });
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host || maximized) return;
-    const update = () => {
-      const scale = Math.max(Math.min(host.clientWidth / DESKTOP_VIEWPORT_WIDTH, 1), 0.1);
-      const height = Math.max(host.clientHeight / scale, 360);
-      setViewport((current) =>
-        Math.abs(current.scale - scale) < 0.001 && Math.abs(current.height - height) < 1
-          ? current
-          : { scale, height },
-      );
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(host);
-    return () => observer.disconnect();
-  }, [maximized]);
-
   return (
-    <div
-      className={`provider-viewport ${maximized ? "provider-viewport-maximized" : ""}`}
-      ref={hostRef}
-    >
-      <div
-        className="provider-viewport-canvas"
-        style={{
-          width: maximized ? "100%" : DESKTOP_VIEWPORT_WIDTH * viewport.scale,
-          height: maximized ? "100%" : viewport.height * viewport.scale,
-        }}
-      >
-        <div
-          className="provider-viewport-desktop"
-          style={{
-            width: maximized ? "100%" : DESKTOP_VIEWPORT_WIDTH,
-            height: maximized ? "100%" : viewport.height,
-            transform: maximized ? "none" : `scale(${viewport.scale})`,
-          }}
-        >
-          <iframe
-            id={`provider-frame-${panelId}`}
-            name={`maw:${panelId}`}
-            src={url}
-            title={`${providerName} 网页`}
-            allow="clipboard-read; clipboard-write"
-            onLoad={() => window.setTimeout(onConnectionTimeout, 10_000)}
-          />
-        </div>
-      </div>
+    <div className="provider-viewport">
+      <iframe
+        id={`provider-frame-${panelId}`}
+        name={`maw:${panelId}`}
+        src={url}
+        title={`${providerName} 网页`}
+        allow="clipboard-read; clipboard-write"
+        onLoad={() => window.setTimeout(onConnectionTimeout, 10_000)}
+      />
     </div>
   );
 }

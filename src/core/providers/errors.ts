@@ -4,6 +4,7 @@ export const providerErrorCodes = [
   "PROMPT_MISMATCH",
   "SUBMIT_MISSING",
   "SUBMIT_DISABLED",
+  "SUBMIT_UNCONFIRMED",
   "LOGIN_REQUIRED",
   "TIMEOUT",
   "ABORTED",

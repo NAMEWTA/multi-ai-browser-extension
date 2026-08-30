@@ -4,7 +4,7 @@ import { providerRegistry } from "./registry";
 const fixtures: Record<string, { composer: string; submit: string }> = {
   deepseek: {
     composer: '<textarea class="ds-scroll-area" placeholder="给 DeepSeek 发送消息"></textarea>',
-    submit: '<button class="ds-icon-button" type="button"><svg></svg></button>',
+    submit: '<button class="ds-icon-button" type="button" aria-label="Send"><svg></svg></button>',
   },
   kimi: {
     composer: '<div class="chat-input-editor" contenteditable="true"></div>',
@@ -55,7 +55,11 @@ describe("Provider plugin contract", () => {
       const composer = document.body.firstElementChild as HTMLElement;
       const submit = document.body.lastElementChild as HTMLElement;
       const click = vi.fn();
-      submit.addEventListener("click", click);
+      submit.addEventListener("click", () => {
+        click();
+        if (composer instanceof HTMLTextAreaElement) composer.value = "";
+        else composer.replaceChildren();
+      });
 
       const strategy = plugin.createStrategy();
       const ctx = { document, window, timeoutMs: 100 };
@@ -64,7 +68,7 @@ describe("Provider plugin contract", () => {
       await strategy.submit(ctx);
 
       const value = composer instanceof HTMLTextAreaElement ? composer.value : composer.textContent;
-      expect(value).toContain("花儿为什么这么红？");
+      expect(value).toBe("");
       expect(click).toHaveBeenCalledTimes(1);
     },
   );

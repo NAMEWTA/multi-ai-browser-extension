@@ -6,13 +6,19 @@ import type {
   ProviderSelectors,
   ProviderStrategy,
 } from "./contracts";
-import { findFirstUsable, waitForElement } from "./dom";
+import {
+  findFirstUsable,
+  normalizeComposerValue,
+  readComposerValue,
+  waitForCondition,
+  waitForElement,
+} from "./dom";
 import { ProviderError } from "./errors";
 import { ButtonSubmitter } from "./submitters/button-submitter";
 import { CompositeComposerWriter } from "./writers/composer-writer";
 
 export abstract class BaseDomStrategy implements ProviderStrategy {
-  private activeComposer?: HTMLElement;
+  protected activeComposer?: HTMLElement;
 
   protected constructor(
     readonly definition: ProviderDefinition,
@@ -50,6 +56,9 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   }
 
   async submit(ctx: FrameContext): Promise<void> {
+    const composer = this.activeComposer;
+    const promptBeforeSubmit = composer ? normalizeComposerValue(readComposerValue(composer)) : "";
+    const urlBeforeSubmit = ctx.window.location.href;
     const button = await waitForElement(ctx.document, this.selectors.submit, {
       signal: ctx.signal,
       timeoutMs: Math.min(ctx.timeoutMs ?? 15_000, 5_000),
@@ -58,5 +67,23 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       throw new ProviderError("SUBMIT_MISSING", "未找到可用的发送按钮", { cause: error });
     });
     this.submitter.submit(button);
+    await waitForCondition(
+      () => {
+        const currentValue = composer ? normalizeComposerValue(readComposerValue(composer)) : "";
+        return (
+          currentValue !== promptBeforeSubmit ||
+          !composer?.isConnected ||
+          ctx.window.location.href !== urlBeforeSubmit ||
+          button.getAttribute("aria-disabled") === "true" ||
+          button.classList.contains("disabled")
+        );
+      },
+      {
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+        timeoutMs: Math.min(ctx.timeoutMs ?? 15_000, 8_000),
+      },
+    ).catch((error: unknown) => {
+      throw new ProviderError("SUBMIT_UNCONFIRMED", "网页未确认消息已发送", { cause: error });
+    });
   }
 }

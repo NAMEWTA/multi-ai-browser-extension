@@ -10,6 +10,7 @@ import { TaskLedger } from "../core/orchestration/task-ledger";
 import { builtInProviderMatches } from "../core/providers/built-in-sites";
 import { startFrameHeartbeat, watchProviderStatus } from "../runtime/provider-status";
 import { connectProviderPort } from "../runtime/provider-port";
+import { appendProviderDiagnostic, describeProviderElement } from "../runtime/provider-diagnostics";
 
 export default defineContentScript({
   matches: [...builtInProviderMatches],
@@ -33,11 +34,23 @@ export default defineContentScript({
     panelId = panelId ?? hello?.panelId;
     if (!panelId || !hello?.ok) return;
 
+    void appendProviderDiagnostic(panelId, plugin.definition.id, { stage: "frame-ready" });
+
     const ctx = { document, window, timeoutMs: 15_000 };
     const handleCommand = async (command: ProviderCommand): Promise<ProviderRunResult> => {
       const operation = command.type === "SYNC_PROMPT" ? "sync" : "submit";
       const requestId =
         command.type === "SYNC_PROMPT" ? `sync:${command.revision}` : command.taskId;
+      const startedAt = performance.now();
+      const composerDescription = describeProviderElement(
+        document.querySelector("[data-lexical-editor='true'], textarea, [contenteditable='true']"),
+      );
+      void appendProviderDiagnostic(panelId, plugin.definition.id, {
+        stage: "command-start",
+        operation,
+        promptLength: command.prompt.length,
+        ...(composerDescription ? { composer: composerDescription } : {}),
+      });
 
       if (command.type === "SYNC_PROMPT" && command.revision < latestRequestedRevision) {
         return {
@@ -77,6 +90,18 @@ export default defineContentScript({
           };
         }
         await strategy.writePrompt(ctx, { text: command.prompt });
+        const submitDescription = describeProviderElement(
+          document.querySelector(
+            ".send-button-container:not(.disabled), button[type='submit']:not(:disabled), button[aria-label*='Send']:not(:disabled), button[aria-label*='发送']:not(:disabled)",
+          ),
+        );
+        void appendProviderDiagnostic(panelId, plugin.definition.id, {
+          stage: "write-confirmed",
+          operation,
+          promptLength: command.prompt.length,
+          durationMs: Math.round(performance.now() - startedAt),
+          ...(submitDescription ? { submit: submitDescription } : {}),
+        });
         if (command.type === "SYNC_PROMPT") {
           return {
             requestId,
@@ -88,6 +113,12 @@ export default defineContentScript({
         }
 
         await strategy.submit(ctx);
+        void appendProviderDiagnostic(panelId, plugin.definition.id, {
+          stage: "submit-confirmed",
+          operation,
+          promptLength: command.prompt.length,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
         const result: ProviderRunResult = {
           requestId,
           panelId: command.panelId,
@@ -99,6 +130,13 @@ export default defineContentScript({
         return result;
       } catch (error) {
         const normalized = normalizeProviderError(error);
+        void appendProviderDiagnostic(panelId, plugin.definition.id, {
+          stage: "command-failed",
+          operation,
+          promptLength: command.prompt.length,
+          durationMs: Math.round(performance.now() - startedAt),
+          errorCode: normalized.code,
+        });
         const result: ProviderRunResult = {
           requestId,
           panelId: command.panelId,

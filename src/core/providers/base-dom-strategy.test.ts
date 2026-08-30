@@ -103,6 +103,9 @@ describe("BaseDomStrategy", () => {
     const buttons = document.querySelectorAll<HTMLButtonElement>(".send");
     const unrelated = vi.spyOn(buttons[0]!, "click");
     const chatSend = vi.spyOn(buttons[1]!, "click");
+    buttons[1]!.addEventListener("click", () => {
+      (document.querySelector("#composer") as HTMLTextAreaElement).value = "";
+    });
     const strategy = new ScopedStrategy();
 
     await strategy.writePrompt({ document, window }, { text: "hello" });
