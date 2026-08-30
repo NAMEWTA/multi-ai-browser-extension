@@ -1,0 +1,11 @@
+.output/
+.wxt/
+coverage/
+node_modules/
+playwright-report/
+playwright-live-report/
+test-results/
+public/icon/*.png
+scripts/icon-source.svg
+LICENSE
+*.ps1

@@ -1,0 +1,14 @@
+node_modules/
+.output/
+.wxt/
+dist/
+coverage/
+playwright-report/
+playwright-live-report/
+test-results/
+*.crx
+*.pem
+*.zip
+.env
+.env.*
+!.env.example
