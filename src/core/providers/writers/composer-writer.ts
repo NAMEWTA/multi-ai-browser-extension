@@ -13,7 +13,6 @@ export class NativeInputWriter implements ComposerWriter {
 
   write(element: HTMLElement, text: string): void {
     if (!(element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement)) return;
-    element.focus();
     const prototype =
       element instanceof HTMLTextAreaElement
         ? HTMLTextAreaElement.prototype
@@ -30,7 +29,6 @@ export class ContentEditableWriter implements ComposerWriter {
   }
 
   write(element: HTMLElement, text: string): void {
-    element.focus();
     const beforeInput = new InputEvent("beforeinput", {
       bubbles: true,
       composed: true,

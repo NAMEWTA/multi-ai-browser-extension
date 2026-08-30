@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -121,13 +122,21 @@ jobs:
 
           Download `multi-ai-workspace-VERSION-chrome.zip`, extract it, then open `chrome://extensions`, enable Developer mode, and choose **Load unpacked**.
 
-          Windows users can download and run `install-latest.ps1` to fetch, verify, and extract the latest package automatically. Chrome requires the final **Load unpacked** confirmation for extensions distributed outside the Chrome Web Store.
+          Windows users can run `powershell -NoProfile -ExecutionPolicy Bypass -File .\install-latest.ps1 INSTALL_ARGS` to fetch, verify, and extract this release channel automatically. Chrome requires the final **Load unpacked** confirmation for extensions distributed outside the Chrome Web Store.
           EOF
           )"
           notes="${notes//VERSION/$VERSION}"
+          prerelease_args=()
+          install_args=""
+          if [[ "$TAG" == *-* ]]; then
+            prerelease_args+=(--prerelease)
+            install_args="-IncludePrerelease"
+          fi
+          notes="${notes//INSTALL_ARGS/$install_args}"
           gh release create "$TAG" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Multi AI Workspace $TAG" \
             --notes "$notes" \
-            --generate-notes
+            --generate-notes \
+            "${prerelease_args[@]}"

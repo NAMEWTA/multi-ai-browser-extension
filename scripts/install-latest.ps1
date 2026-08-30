@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "MultiAIWorkspace"),
+  [switch]$IncludePrerelease,
   [switch]$SkipOpen
 )
 
@@ -14,7 +15,16 @@ $headers = @{
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("multi-ai-workspace-" + [guid]::NewGuid())
 
 try {
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/latest" -Headers $headers
+  if ($IncludePrerelease) {
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases?per_page=20" -Headers $headers |
+      Where-Object { -not $_.draft } |
+      Select-Object -First 1
+  } else {
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/latest" -Headers $headers
+  }
+  if (-not $release) {
+    throw "No matching GitHub Release was found."
+  }
   $version = $release.tag_name -replace '^v', ''
   $archiveName = "multi-ai-workspace-$version-chrome.zip"
   $checksumName = "multi-ai-workspace-$version-SHA256SUMS.txt"

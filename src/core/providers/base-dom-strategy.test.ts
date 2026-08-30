@@ -46,6 +46,25 @@ describe("BaseDomStrategy", () => {
     expect(composer.value).toBe("");
   });
 
+  it("does not steal focus while synchronizing native and contenteditable composers", () => {
+    document.body.innerHTML = `
+      <input id="workspace-input" />
+      <textarea id="native-composer"></textarea>
+      <div id="rich-composer" contenteditable="true"></div>
+    `;
+    const workspaceInput = document.querySelector<HTMLInputElement>("#workspace-input")!;
+    const nativeComposer = document.querySelector<HTMLElement>("#native-composer")!;
+    const richComposer = document.querySelector<HTMLElement>("#rich-composer")!;
+    const writer = new CompositeComposerWriter();
+    workspaceInput.focus();
+
+    writer.write(nativeComposer, "native");
+    expect(document.activeElement).toBe(workspaceInput);
+
+    writer.write(richComposer, "rich");
+    expect(document.activeElement).toBe(workspaceInput);
+  });
+
   it("normalizes abort, regular and unknown failures", () => {
     expect(normalizeProviderError(new ProviderError("TIMEOUT", "late")).code).toBe("TIMEOUT");
     expect(normalizeProviderError(new DOMException("stop", "AbortError")).code).toBe("ABORTED");

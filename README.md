@@ -37,6 +37,12 @@ Windows 用户也可以下载 Release 中的 `install-latest.ps1`，或从仓库
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-latest.ps1
 ```
 
+安装最新 Alpha/预发布版本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-latest.ps1 -IncludePrerelease
+```
+
 脚本会自动查询最新 Release、下载并验证 SHA-256、解压到 `%LOCALAPPDATA%\MultiAIWorkspace\<version>`、复制目录路径并打开扩展管理页。Chrome 不允许从 GitHub 在 Windows/macOS 上静默安装扩展，因此最后的“加载已解压的扩展程序”必须由用户确认。
 
 ### 本地构建

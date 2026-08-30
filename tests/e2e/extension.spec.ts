@@ -76,8 +76,35 @@ test("synchronizes text into native website composers without submitting", async
   }
 });
 
+test("keeps the global composer focused during debounced cross-frame synchronization", async () => {
+  const composer = workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页");
+  await composer.fill("");
+  await composer.focus();
+
+  for (const character of "持续输入不失焦") {
+    await composer.pressSequentially(character);
+    await workspace.waitForTimeout(180);
+    await expect(composer).toBeFocused();
+  }
+
+  await expect(composer).toHaveValue("持续输入不失焦");
+  await expect(
+    workspace
+      .locator("article.provider-panel[data-provider='deepseek'] iframe")
+      .contentFrame()
+      .locator("body"),
+  ).toHaveAttribute("data-last-synced", "持续输入不失焦");
+  await expect(
+    workspace
+      .locator("article.provider-panel[data-provider='kimi'] iframe")
+      .contentFrame()
+      .locator("body"),
+  ).toHaveAttribute("data-last-synced", "持续输入不失焦");
+});
+
 test("submits the synchronized prompt exactly once and stores a lightweight history snapshot", async () => {
   const prompt = "你是什么模型？我是通过统一输入框输入的";
+  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill(prompt);
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   const frames = workspace.locator("article.provider-panel iframe");
   for (let index = 0; index < 2; index += 1) {

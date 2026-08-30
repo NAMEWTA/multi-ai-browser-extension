@@ -126,6 +126,7 @@ needs-login  blocked  sync-error  submit-error  unavailable
 - 输入变化以 120ms trailing debounce 广播。
 - 每个面板只保留最新 `revision`，丢弃过期写入。
 - IME composition 期间不广播，`compositionend` 后立即同步。
+- 同步写入不得调用 Provider 输入框的 `focus()`；全局输入期间焦点必须始终留在工作台输入框。
 - Provider 收到发送命令后再次写入并回读最终文本，再触发该网页的一次原生提交。
 - 用户可在面板内手动修改；下一次全局输入会明确覆盖当前启用面板的输入内容。
 
