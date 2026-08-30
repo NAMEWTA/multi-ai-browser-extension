@@ -12,7 +12,7 @@ export type PanelStatus =
   | "submitted"
   | "error"
   | "unavailable";
-export type LayoutMode = "columns" | "grid";
+export type LayoutMode = "tiles" | "adaptive";
 
 export interface WorkspacePanel {
   id: string;
@@ -26,10 +26,12 @@ export interface WorkspacePanel {
 interface PersistedWorkspace {
   panels: WorkspacePanel[];
   sidebarOpen: boolean;
-  layoutMode: LayoutMode;
+  layoutMode: LayoutMode | "columns" | "grid";
+  tileRatios: Record<string, number>;
 }
 
-interface WorkspaceState extends PersistedWorkspace {
+interface WorkspaceState extends Omit<PersistedWorkspace, "layoutMode"> {
+  layoutMode: LayoutMode;
   hydrated: boolean;
   hydrate(): Promise<void>;
   addPanel(providerId: ProviderId): void;
@@ -40,6 +42,7 @@ interface WorkspaceState extends PersistedWorkspace {
   setPanelStatus(panelId: string, status: PanelStatus, message?: string): void;
   setSidebarOpen(open: boolean): void;
   setLayoutMode(mode: LayoutMode): void;
+  setTileRatios(ratios: Record<string, number>): void;
 }
 
 const STORAGE_KEY = "workspace-v3";
@@ -54,7 +57,8 @@ const initialPanels: WorkspacePanel[] = (["deepseek", "kimi"] as const).map((pro
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   panels: initialPanels,
   sidebarOpen: true,
-  layoutMode: "columns",
+  layoutMode: "tiles",
+  tileRatios: {},
   hydrated: false,
 
   async hydrate() {
@@ -65,7 +69,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({
         panels,
         sidebarOpen: persisted?.sidebarOpen ?? true,
-        layoutMode: persisted?.layoutMode === "grid" ? "grid" : "columns",
+        layoutMode:
+          persisted?.layoutMode === "adaptive" || persisted?.layoutMode === "grid"
+            ? "adaptive"
+            : "tiles",
+        tileRatios: persisted?.tileRatios ?? {},
         hydrated: true,
       });
       return;
@@ -156,6 +164,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ layoutMode });
     void persist(get());
   },
+
+  setTileRatios(tileRatios) {
+    set({ tileRatios });
+    void persist(get());
+  },
 }));
 
 async function persist(state: PersistedWorkspace): Promise<void> {
@@ -164,6 +177,7 @@ async function persist(state: PersistedWorkspace): Promise<void> {
       panels: state.panels,
       sidebarOpen: state.sidebarOpen,
       layoutMode: state.layoutMode,
+      tileRatios: state.tileRatios,
     },
   });
 }

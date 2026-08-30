@@ -34,7 +34,9 @@ export default defineContentScript({
     panelId = panelId ?? hello?.panelId;
     if (!panelId || !hello?.ok) return;
 
-    void appendProviderDiagnostic(panelId, plugin.definition.id, { stage: "frame-ready" });
+    void appendProviderDiagnostic(panelId, plugin.definition.id, {
+      stage: "frame-ready",
+    }).catch(() => undefined);
 
     const ctx = { document, window, timeoutMs: 15_000 };
     const handleCommand = async (command: ProviderCommand): Promise<ProviderRunResult> => {
@@ -50,7 +52,7 @@ export default defineContentScript({
         operation,
         promptLength: command.prompt.length,
         ...(composerDescription ? { composer: composerDescription } : {}),
-      });
+      }).catch(() => undefined);
 
       if (command.type === "SYNC_PROMPT" && command.revision < latestRequestedRevision) {
         return {
@@ -92,7 +94,7 @@ export default defineContentScript({
         await strategy.writePrompt(ctx, { text: command.prompt });
         const submitDescription = describeProviderElement(
           document.querySelector(
-            ".send-button-container:not(.disabled), button[type='submit']:not(:disabled), button[aria-label*='Send']:not(:disabled), button[aria-label*='发送']:not(:disabled)",
+            "div[role='button'].ds-button--primary.ds-button--circle:not(.ds-button--disabled), .send-button-container:not(.disabled), button[type='submit']:not(:disabled), button[aria-label*='Send']:not(:disabled), button[aria-label*='发送']:not(:disabled)",
           ),
         );
         void appendProviderDiagnostic(panelId, plugin.definition.id, {
@@ -101,7 +103,7 @@ export default defineContentScript({
           promptLength: command.prompt.length,
           durationMs: Math.round(performance.now() - startedAt),
           ...(submitDescription ? { submit: submitDescription } : {}),
-        });
+        }).catch(() => undefined);
         if (command.type === "SYNC_PROMPT") {
           return {
             requestId,
@@ -118,7 +120,7 @@ export default defineContentScript({
           operation,
           promptLength: command.prompt.length,
           durationMs: Math.round(performance.now() - startedAt),
-        });
+        }).catch(() => undefined);
         const result: ProviderRunResult = {
           requestId,
           panelId: command.panelId,
@@ -136,7 +138,7 @@ export default defineContentScript({
           promptLength: command.prompt.length,
           durationMs: Math.round(performance.now() - startedAt),
           errorCode: normalized.code,
-        });
+        }).catch(() => undefined);
         const result: ProviderRunResult = {
           requestId,
           panelId: command.panelId,

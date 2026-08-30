@@ -5,6 +5,7 @@ import {
   frameStatusSchema,
   openPanelTabSchema,
   openWorkspaceSchema,
+  providerDiagnosticSchema,
   providerIdSchema,
   providerRunResultSchema,
   runtimeMessageSchema,
@@ -18,6 +19,8 @@ import { enableIframeRules } from "../core/permissions/frame-policy-manager";
 import { runtimeSnapshotSchema } from "../core/messaging/runtime-snapshot";
 
 const RUNTIME_SNAPSHOT_KEY = "runtime-snapshot-v1";
+const DIAGNOSTIC_PREFIX = "provider-diagnostics-v1:";
+const MAX_DIAGNOSTICS_PER_PANEL = 80;
 
 interface Target {
   panelId: string;
@@ -40,6 +43,25 @@ export default defineBackground(() => {
   >();
   const runtimeReady = restoreRuntimeSnapshot(frames, fallbackTabs);
   let persistQueue = Promise.resolve();
+  let diagnosticQueue = Promise.resolve();
+
+  function persistDiagnostic(
+    message: ReturnType<typeof providerDiagnosticSchema.parse>,
+    url: string,
+  ): Promise<void> {
+    const key = `${DIAGNOSTIC_PREFIX}${message.panelId}`;
+    diagnosticQueue = diagnosticQueue
+      .catch(() => undefined)
+      .then(async () => {
+        const stored = await browser.storage.session.get(key);
+        const current = Array.isArray(stored[key]) ? stored[key] : [];
+        const record = { ...message, at: new Date().toISOString(), url };
+        await browser.storage.session.set({
+          [key]: [...current, record].slice(-MAX_DIAGNOSTICS_PER_PANEL),
+        });
+      });
+    return diagnosticQueue;
+  }
 
   function persistRuntimeSnapshot(): Promise<void> {
     const snapshot = {
@@ -272,6 +294,21 @@ export default defineBackground(() => {
       await browser.runtime
         .sendMessage({ ...message, type: "WORKSPACE_FRAME_STATUS" })
         .catch(() => undefined);
+      return { ok: true };
+    }
+
+    if (providerDiagnosticSchema.safeParse(parsed.data).success) {
+      const message = providerDiagnosticSchema.parse(parsed.data);
+      const frame = frames.get(message.panelId);
+      if (
+        !frame ||
+        sender.tab?.id !== frame.tabId ||
+        sender.frameId !== frame.frameId ||
+        message.providerId !== frame.providerId
+      ) {
+        return { ok: false };
+      }
+      await persistDiagnostic(message, sender.url ?? frame.url);
       return { ok: true };
     }
 

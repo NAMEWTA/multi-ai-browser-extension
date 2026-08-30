@@ -480,23 +480,66 @@ textarea:focus-visible {
   height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+}
+
+.panel-grid.layout-tiles {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.panel-grid.layout-adaptive {
+  grid-template-columns: repeat(var(--adaptive-columns), minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   gap: 8px;
-  overflow: auto;
 }
 
-.panel-grid.layout-columns {
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(720px, 1fr);
-}
-
-.panel-grid.layout-grid {
-  grid-template-columns: repeat(2, minmax(720px, 1fr));
-  grid-auto-rows: minmax(360px, 1fr);
+.panel-grid.layout-adaptive.adaptive-single {
+  grid-auto-rows: minmax(420px, 1fr);
+  overflow-y: auto;
 }
 
 .panel-grid.has-maximized {
   display: block;
   overflow: hidden;
+}
+
+.panel-divider {
+  position: relative;
+  z-index: 4;
+  width: 8px;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.panel-divider::after {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 4px;
+  height: 46px;
+  border-radius: 4px;
+  background: #c5cbd4;
+  content: "";
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.panel-divider:hover::after,
+.panel-divider:focus-visible::after,
+.panel-grid.is-resizing .panel-divider::after {
+  opacity: 1;
+}
+
+.panel-grid.is-resizing,
+.panel-grid.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.panel-grid.is-resizing iframe {
+  pointer-events: none;
 }
 
 .provider-panel {
@@ -571,6 +614,12 @@ textarea:focus-visible {
   gap: 5px;
   color: #777f8b;
   font-size: 9px;
+}
+
+.panel-status > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-status i {

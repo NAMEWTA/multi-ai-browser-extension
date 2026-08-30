@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Scaling,
   Trash2,
   X,
 } from "lucide-react";
@@ -46,6 +47,7 @@ export function WorkspaceApp() {
   const [historyQuery, setHistoryQuery] = useState("");
   const [details, setDetails] = useState<SendRecord>();
   const [runtimeReady, setRuntimeReady] = useState(false);
+  const [layoutResetKey, setLayoutResetKey] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const editedRef = useRef(false);
   const syncRevisionRef = useRef(0);
@@ -323,26 +325,39 @@ export function WorkspaceApp() {
           <div className="layout-switch" role="group" aria-label="面板布局">
             <button
               type="button"
-              className={layoutMode === "columns" ? "active" : ""}
-              title="分栏布局"
-              aria-label="分栏布局"
-              aria-pressed={layoutMode === "columns"}
-              onClick={() => setLayoutMode("columns")}
+              className={layoutMode === "tiles" ? "active" : ""}
+              title="平铺布局"
+              aria-label="平铺布局"
+              aria-pressed={layoutMode === "tiles"}
+              onClick={() => setLayoutMode("tiles")}
             >
               <Columns3 size={16} />
             </button>
             <button
               type="button"
-              className={layoutMode === "grid" ? "active" : ""}
-              title="网格布局"
-              aria-label="网格布局"
-              aria-pressed={layoutMode === "grid"}
-              onClick={() => setLayoutMode("grid")}
+              className={layoutMode === "adaptive" ? "active" : ""}
+              title="自适应布局"
+              aria-label="自适应布局"
+              aria-pressed={layoutMode === "adaptive"}
+              onClick={() => setLayoutMode("adaptive")}
             >
               <Grid2X2 size={16} />
             </button>
           </div>
           <div className="toolbar-actions">
+            <button
+              className="icon-button"
+              type="button"
+              title="等分容器"
+              aria-label="等分容器"
+              disabled={layoutMode !== "tiles" || panels.length < 2}
+              onClick={() => {
+                useWorkspaceStore.getState().setTileRatios({});
+                setLayoutResetKey((current) => current + 1);
+              }}
+            >
+              <Scaling size={16} />
+            </button>
             <button
               className="icon-button"
               type="button"
@@ -413,22 +428,13 @@ export function WorkspaceApp() {
               </button>
             </div>
           ) : (
-            <section
-              className={`panel-grid layout-${layoutMode} ${maximized ? "has-maximized" : ""}`}
-              style={{ "--panel-count": Math.min(panels.length, 6) } as React.CSSProperties}
-            >
-              {panels.map((panel, index) => (
-                <ProviderPanel
-                  key={`${panel.id}:${panel.revision}`}
-                  panel={panel}
-                  index={index}
-                  count={panels.length}
-                  maximized={panel.id === maximized}
-                  hidden={Boolean(maximized && panel.id !== maximized)}
-                  onMaximize={() => setMaximized(maximized === panel.id ? undefined : panel.id)}
-                />
-              ))}
-            </section>
+            <PanelLayout
+              key={`${panels.map((panel) => panel.id).join("|")}:${layoutResetKey}`}
+              panels={panels}
+              layoutMode={layoutMode}
+              maximized={maximized}
+              onMaximize={(panelId) => setMaximized(maximized === panelId ? undefined : panelId)}
+            />
           )}
         </main>
       </section>
@@ -437,6 +443,159 @@ export function WorkspaceApp() {
       {details && <HistoryDetail record={details} onClose={() => setDetails(undefined)} />}
     </div>
   );
+}
+
+function PanelLayout({
+  panels,
+  layoutMode,
+  maximized,
+  onMaximize,
+}: {
+  panels: WorkspacePanel[];
+  layoutMode: "tiles" | "adaptive";
+  maximized: string | undefined;
+  onMaximize(panelId: string): void;
+}) {
+  const persistedRatios = useWorkspaceStore((state) => state.tileRatios);
+  const setTileRatios = useWorkspaceStore((state) => state.setTileRatios);
+  const panelSignature = panels.map((panel) => panel.id).join("|");
+  const panelIds = useMemo(() => panelSignature.split("|").filter(Boolean), [panelSignature]);
+  const hostRef = useRef<HTMLElement>(null);
+  const initialRatios = normalizedRatios(panelIds, persistedRatios);
+  const ratiosRef = useRef(initialRatios);
+  const [ratios, setRatios] = useState(initialRatios);
+  const [hostWidth, setHostWidth] = useState(0);
+  const [resizing, setResizing] = useState(false);
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const update = () =>
+      setHostWidth((current) => (current === host.clientWidth ? current : host.clientWidth));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  function applyRatios(next: number[]) {
+    ratiosRef.current = next;
+    setRatios(next);
+  }
+
+  function resizeBoundary(index: number, initial: number[], deltaRatio: number) {
+    const next = [...initial];
+    const pairTotal = (initial[index] ?? 0) + (initial[index + 1] ?? 0);
+    const minimum = Math.min(0.18, 0.7 / Math.max(panels.length, 1));
+    const left = Math.min(
+      Math.max((initial[index] ?? 0) + deltaRatio, minimum),
+      pairTotal - minimum,
+    );
+    next[index] = left;
+    next[index + 1] = pairTotal - left;
+    applyRatios(next);
+  }
+
+  function commitRatios() {
+    setTileRatios(
+      Object.fromEntries(panels.map((panel, index) => [panel.id, ratiosRef.current[index] ?? 0])),
+    );
+  }
+
+  const adaptiveColumns = adaptiveColumnCount(panels.length, hostWidth);
+  const style = maximized
+    ? undefined
+    : layoutMode === "tiles"
+      ? {
+          gridTemplateColumns: ratios
+            .flatMap((ratio, index) =>
+              index < ratios.length - 1
+                ? [`minmax(0, ${ratio}fr)`, "8px"]
+                : [`minmax(0, ${ratio}fr)`],
+            )
+            .join(" "),
+        }
+      : ({ "--adaptive-columns": adaptiveColumns } as React.CSSProperties);
+
+  return (
+    <section
+      ref={hostRef}
+      className={`panel-grid layout-${layoutMode} ${hostWidth < 700 ? "adaptive-single" : ""} ${resizing ? "is-resizing" : ""} ${maximized ? "has-maximized" : ""}`}
+      style={style}
+    >
+      {panels.map((panel, index) => (
+        <Fragment key={`${panel.id}:${panel.revision}`}>
+          <ProviderPanel
+            panel={panel}
+            index={index}
+            count={panels.length}
+            maximized={panel.id === maximized}
+            hidden={Boolean(maximized && panel.id !== maximized)}
+            onMaximize={() => onMaximize(panel.id)}
+          />
+          {layoutMode === "tiles" && !maximized && index < panels.length - 1 && (
+            <div
+              className="panel-divider"
+              role="separator"
+              aria-label={`调整 ${index + 1} 和 ${index + 2} 号面板宽度`}
+              aria-orientation="vertical"
+              tabIndex={0}
+              onDoubleClick={() => {
+                const equal = panels.map(() => 1 / panels.length);
+                applyRatios(equal);
+                setTileRatios({});
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                resizeBoundary(index, ratiosRef.current, event.key === "ArrowLeft" ? -0.02 : 0.02);
+                commitRatios();
+              }}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                const divider = event.currentTarget;
+                const initial = [...ratiosRef.current];
+                const startX = event.clientX;
+                const availableWidth = Math.max(
+                  (hostRef.current?.clientWidth ?? 1) - (panels.length - 1) * 8,
+                  1,
+                );
+                divider.setPointerCapture(event.pointerId);
+                setResizing(true);
+                const move = (moveEvent: PointerEvent) => {
+                  resizeBoundary(index, initial, (moveEvent.clientX - startX) / availableWidth);
+                };
+                const finish = () => {
+                  divider.removeEventListener("pointermove", move);
+                  divider.removeEventListener("pointerup", finish);
+                  divider.removeEventListener("pointercancel", finish);
+                  setResizing(false);
+                  commitRatios();
+                };
+                divider.addEventListener("pointermove", move);
+                divider.addEventListener("pointerup", finish);
+                divider.addEventListener("pointercancel", finish);
+              }}
+            />
+          )}
+        </Fragment>
+      ))}
+    </section>
+  );
+}
+
+function normalizedRatios(panelIds: string[], persisted: Record<string, number>): number[] {
+  const values = panelIds.map((panelId) => persisted[panelId] ?? 1);
+  const total = values.reduce((sum, value) => sum + Math.max(value, 0.01), 0);
+  return values.map((value) => Math.max(value, 0.01) / total);
+}
+
+function adaptiveColumnCount(count: number, width: number): number {
+  if (count <= 1 || width < 700) return 1;
+  if (count === 2) return 2;
+  if (count === 3) return width >= 1_200 ? 3 : 2;
+  if (count === 4) return 2;
+  if (count <= 6) return width >= 1_100 ? 3 : 2;
+  return width >= 1_600 ? 4 : width >= 1_000 ? 3 : 2;
 }
 
 function ProviderTarget({ panel }: { panel: WorkspacePanel }) {
@@ -498,7 +657,10 @@ function ProviderPanel({
         </label>
         <span className={`panel-status status-${panel.status}`} title={panel.message}>
           <i />
-          {statusLabel(panel.status)}
+          <span>
+            {statusLabel(panel.status)}
+            {panel.status === "error" && panel.message ? ` · ${panel.message}` : ""}
+          </span>
         </span>
         <div className="panel-actions">
           <button

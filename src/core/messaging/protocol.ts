@@ -72,6 +72,27 @@ export const workspaceFrameStatusSchema = frameStatusSchema.extend({
   type: z.literal("WORKSPACE_FRAME_STATUS"),
 });
 
+export const providerDiagnosticSchema = z
+  .object({
+    type: z.literal("PROVIDER_DIAGNOSTIC"),
+    panelId: z.string().min(1),
+    providerId: providerIdSchema,
+    stage: z.enum([
+      "frame-ready",
+      "command-start",
+      "write-confirmed",
+      "submit-confirmed",
+      "command-failed",
+    ]),
+    operation: z.enum(["sync", "submit"]).optional(),
+    promptLength: z.number().int().min(0).max(100_000).optional(),
+    durationMs: z.number().int().min(0).max(120_000).optional(),
+    composer: z.string().max(300).optional(),
+    submit: z.string().max(300).optional(),
+    errorCode: z.enum(providerErrorCodes).optional(),
+  })
+  .strict();
+
 export const runtimeMessageSchema = z.discriminatedUnion("type", [
   frameHelloSchema,
   frameStatusSchema,
@@ -83,6 +104,7 @@ export const runtimeMessageSchema = z.discriminatedUnion("type", [
   workspaceReadySchema,
   openPanelTabSchema,
   workspaceFrameStatusSchema,
+  providerDiagnosticSchema,
 ]);
 
 export const providerRunResultSchema = z.object({
@@ -101,3 +123,4 @@ export type SubmitPromptMessage = z.infer<typeof submitPromptSchema>;
 export type WorkspaceSyncMessage = z.infer<typeof workspaceSyncSchema>;
 export type WorkspaceSubmitMessage = z.infer<typeof workspaceSubmitSchema>;
 export type ProviderRunResult = z.infer<typeof providerRunResultSchema>;
+export type ProviderDiagnosticMessage = z.infer<typeof providerDiagnosticSchema>;

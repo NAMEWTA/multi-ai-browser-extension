@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   frameStatusSchema,
+  providerDiagnosticSchema,
   runtimeMessageSchema,
   workspaceSubmitSchema,
   workspaceSyncSchema,
@@ -59,6 +60,29 @@ describe("runtime message validation", () => {
         panelId: "panel-1",
         providerId: "deepseek",
         status: "authenticated",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("allows only bounded diagnostic metadata", () => {
+    expect(
+      providerDiagnosticSchema.safeParse({
+        type: "PROVIDER_DIAGNOSTIC",
+        panelId: "panel-1",
+        providerId: "deepseek",
+        stage: "command-failed",
+        operation: "submit",
+        promptLength: 20,
+        errorCode: "SUBMIT_MISSING",
+      }).success,
+    ).toBe(true);
+    expect(
+      providerDiagnosticSchema.safeParse({
+        type: "PROVIDER_DIAGNOSTIC",
+        panelId: "panel-1",
+        providerId: "deepseek",
+        stage: "command-failed",
+        prompt: "正文不得进入诊断协议",
       }).success,
     ).toBe(false);
   });

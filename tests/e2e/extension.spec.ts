@@ -236,8 +236,9 @@ test("renders stable rounded workbench layouts without page overflow", async () 
   await workspace.setViewportSize({ width: 1440, height: 900 });
   await expect(workspace.locator(".app-toolbar")).toBeVisible();
   await expect(workspace.locator(".global-composer")).toBeVisible();
-  await workspace.getByTitle("网格布局").click();
-  await expect(workspace.locator(".panel-grid")).toHaveClass(/layout-grid/);
+  await workspace.getByTitle("自适应布局").click();
+  const grid = workspace.locator(".panel-grid");
+  await expect(grid).toHaveClass(/layout-adaptive/);
   const size = await workspace.evaluate(() => ({
     scrollWidth: document.body.scrollWidth,
     clientWidth: document.body.clientWidth,
@@ -246,8 +247,36 @@ test("renders stable rounded workbench layouts without page overflow", async () 
   }));
   expect(size.scrollWidth).toBe(size.clientWidth);
   expect(size.scrollHeight).toBe(size.clientHeight);
-  await workspace.getByTitle("分栏布局").click();
+  const gridSize = await grid.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(gridSize.scrollWidth).toBe(gridSize.clientWidth);
+  await workspace.getByTitle("平铺布局").click();
   await workspace.screenshot({ path: "test-results/workspace-v3-1440x900.png", fullPage: true });
+});
+
+test("resizes adjacent tiled panels and restores equal widths", async () => {
+  await workspace.getByTitle("平铺布局").click();
+  const panels = workspace.locator("article.provider-panel");
+  const divider = workspace.locator(".panel-divider").first();
+  await expect(workspace.locator(".panel-divider")).toHaveCount((await panels.count()) - 1);
+  const before = await panels.evaluateAll((elements) =>
+    elements.slice(0, 2).map((element) => element.getBoundingClientRect().width),
+  );
+  await divider.focus();
+  await divider.press("ArrowRight");
+  const after = await panels.evaluateAll((elements) =>
+    elements.slice(0, 2).map((element) => element.getBoundingClientRect().width),
+  );
+  expect(after[0]).toBeGreaterThan(before[0]!);
+  expect(Math.abs(after[0]! + after[1]! - before[0]! - before[1]!)).toBeLessThan(2);
+
+  await workspace.getByTitle("等分容器").click();
+  const reset = await panels.evaluateAll((elements) =>
+    elements.slice(0, 2).map((element) => element.getBoundingClientRect().width),
+  );
+  expect(Math.abs(reset[0]! - reset[1]!)).toBeLessThan(2);
 });
 
 test("renders provider frames at a stable native scale", async () => {
