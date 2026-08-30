@@ -7,11 +7,12 @@ import {
   openWorkspaceSchema,
   providerDiagnosticSchema,
   providerIdSchema,
+  providerResponseUpdateSchema,
   providerRunResultSchema,
   runtimeMessageSchema,
   workspaceReadySchema,
+  workspaceNewSessionSchema,
   workspaceSubmitSchema,
-  workspaceSyncSchema,
   type ProviderCommand,
   type ProviderRunResult,
 } from "../core/messaging/protocol";
@@ -170,13 +171,17 @@ export default defineBackground(() => {
     command: ProviderCommand,
   ): Promise<ProviderRunResult> {
     return new Promise((resolve, reject) => {
-      const key = runKey(command.panelId, requestId(command));
+      const key = runKey(command.panelId, commandOperation(command), requestId(command));
       const timeout = setTimeout(
         () => {
           pendingRuns.delete(key);
           reject(new Error("网页面板响应超时"));
         },
-        command.type === "SYNC_PROMPT" ? 5_000 : 20_000,
+        command.type === "PREPARE_PROMPT"
+          ? 10_000
+          : command.type === "START_NEW_CONVERSATION"
+            ? 15_000
+            : 20_000,
       );
       pendingRuns.set(key, { panelId: command.panelId, resolve, reject, timeout });
       try {
@@ -196,7 +201,7 @@ export default defineBackground(() => {
     port.onMessage.addListener((raw) => {
       const parsed = providerRunResultSchema.safeParse(raw);
       if (!parsed.success) return;
-      const key = runKey(parsed.data.panelId, parsed.data.requestId);
+      const key = runKey(parsed.data.panelId, parsed.data.operation, parsed.data.requestId);
       const pending = pendingRuns.get(key);
       if (!pending || pending.panelId !== binding.panelId) return;
       clearTimeout(pending.timeout);
@@ -312,23 +317,60 @@ export default defineBackground(() => {
       return { ok: true };
     }
 
-    if (workspaceSyncSchema.safeParse(parsed.data).success) {
-      const command = workspaceSyncSchema.parse(parsed.data);
-      return await dispatchMany(sender.tab?.id, command.targets, (target) => ({
-        type: "SYNC_PROMPT",
-        panelId: target.panelId,
-        revision: command.revision,
-        prompt: command.prompt,
-      }));
+    if (providerResponseUpdateSchema.safeParse(parsed.data).success) {
+      const message = providerResponseUpdateSchema.parse(parsed.data);
+      const frame = frames.get(message.panelId);
+      if (
+        !frame ||
+        sender.tab?.id !== frame.tabId ||
+        sender.frameId !== frame.frameId ||
+        message.providerId !== frame.providerId
+      ) {
+        return { ok: false };
+      }
+      await browser.runtime
+        .sendMessage({ ...message, type: "WORKSPACE_RESPONSE_UPDATE" })
+        .catch(() => undefined);
+      return { ok: true };
     }
 
     if (workspaceSubmitSchema.safeParse(parsed.data).success) {
       const command = workspaceSubmitSchema.parse(parsed.data);
-      return await dispatchMany(sender.tab?.id, command.targets, (target) => ({
-        type: "SUBMIT_PROMPT",
+      const prepared = await dispatchMany(sender.tab?.id, command.targets, (target) => ({
+        type: "PREPARE_PROMPT",
         panelId: target.panelId,
-        taskId: command.taskId,
+        sessionId: command.sessionId,
+        turnId: command.turnId,
         prompt: command.prompt,
+      }));
+      if (
+        prepared.some((result) => result.status !== "prepared" && result.status !== "duplicate")
+      ) {
+        return prepared.map((result) =>
+          result.status === "prepared" || result.status === "duplicate"
+            ? {
+                ...result,
+                status: "aborted" as const,
+                message: "其他网页预检失败，本次未点击任何发送按钮",
+              }
+            : result,
+        );
+      }
+      return await dispatchMany(sender.tab?.id, command.targets, (target) => ({
+        type: "COMMIT_PROMPT",
+        panelId: target.panelId,
+        sessionId: command.sessionId,
+        turnId: command.turnId,
+        prompt: command.prompt,
+      }));
+    }
+
+    if (workspaceNewSessionSchema.safeParse(parsed.data).success) {
+      const command = workspaceNewSessionSchema.parse(parsed.data);
+      return await dispatchMany(sender.tab?.id, command.targets, (target) => ({
+        type: "START_NEW_CONVERSATION",
+        panelId: target.panelId,
+        sessionId: command.sessionId,
       }));
     }
 
@@ -397,7 +439,15 @@ async function openWorkspace(): Promise<void> {
 }
 
 function requestId(command: ProviderCommand): string {
-  return command.type === "SYNC_PROMPT" ? `sync:${command.revision}` : command.taskId;
+  return command.type === "START_NEW_CONVERSATION" ? command.sessionId : command.turnId;
+}
+
+function commandOperation(command: ProviderCommand): ProviderRunResult["operation"] {
+  return command.type === "PREPARE_PROMPT"
+    ? "prepare"
+    : command.type === "COMMIT_PROMPT"
+      ? "submit"
+      : "new-session";
 }
 
 function unavailableResult(
@@ -408,7 +458,7 @@ function unavailableResult(
   return {
     requestId: command ? requestId(command) : crypto.randomUUID(),
     panelId,
-    operation: command?.type === "SYNC_PROMPT" ? "sync" : "submit",
+    operation: command ? commandOperation(command) : "submit",
     status: "unavailable",
     message,
   };
@@ -422,8 +472,12 @@ function sameOrigin(url: string, expectedOrigin: string): boolean {
   }
 }
 
-function runKey(panelId: string, request: string): string {
-  return `${panelId}:${request}`;
+function runKey(
+  panelId: string,
+  operation: ProviderRunResult["operation"],
+  request: string,
+): string {
+  return `${panelId}:${operation}:${request}`;
 }
 
 function parseProviderPortName(name: string): { panelId: string; providerId: string } | undefined {

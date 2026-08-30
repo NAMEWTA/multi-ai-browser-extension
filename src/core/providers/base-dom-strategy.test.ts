@@ -21,6 +21,8 @@ class TestStrategy extends BaseDomStrategy {
       composer: ["#composer"],
       submit: ["#send"],
       login: ["#login"],
+      responses: [".assistant-response"],
+      newConversationLabels: ["New chat"],
     });
   }
 }
@@ -88,6 +90,53 @@ describe("BaseDomStrategy", () => {
     ).rejects.toMatchObject({
       code: "SUBMIT_MISSING",
     });
+  });
+
+  it("preflights without mutating the page and rejects an occupied composer", async () => {
+    document.body.innerHTML =
+      '<textarea id="composer">draft</textarea><button id="send">send</button>';
+    const strategy = new TestStrategy();
+    await expect(strategy.prepareSubmit({ document, window })).rejects.toMatchObject({
+      code: "COMPOSER_NOT_EMPTY",
+    });
+    expect(document.querySelector<HTMLTextAreaElement>("#composer")?.value).toBe("draft");
+  });
+
+  it("captures a new stable assistant response as plain text", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML =
+        '<textarea id="composer"></textarea><button id="send">send</button>';
+      const strategy = new TestStrategy();
+      const ctx = { document, window, responseTimeoutMs: 3_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const response = document.createElement("div");
+      response.className = "assistant-response";
+      response.textContent = "最终回复";
+      document.body.append(response);
+      await vi.advanceTimersByTimeAsync(2_250);
+      await expect(capture).resolves.toEqual({ status: "completed", text: "最终回复" });
+      expect(updates).toHaveBeenCalledWith({ status: "streaming", text: "最终回复" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a new official conversation through the configured control", async () => {
+    document.body.innerHTML = `
+      <button id="new">New chat</button>
+      <textarea id="composer"></textarea>
+      <button id="send">send</button>
+      <div class="assistant-response">old answer</div>
+    `;
+    document.querySelector("#new")?.addEventListener("click", () => {
+      document.querySelector(".assistant-response")?.remove();
+    });
+    await expect(
+      new TestStrategy().startNewConversation({ document, window, timeoutMs: 100 }),
+    ).resolves.toBeUndefined();
   });
 
   it("submits with the matching control nearest to the active composer", async () => {

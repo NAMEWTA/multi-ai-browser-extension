@@ -3,14 +3,16 @@
 [![CI](https://github.com/NAMEWTA/multi-ai-browser-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/NAMEWTA/multi-ai-browser-extension/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/NAMEWTA/multi-ai-browser-extension)](https://github.com/NAMEWTA/multi-ai-browser-extension/releases/latest)
 
-Chrome/Chromium 全页扩展工作台：在一个标签页中并排打开多个真实 AI 官方网页，将全局输入同步到各网页的原生输入框，并在用户确认后统一触发发送。
+Chrome/Chromium 全页扩展工作台：在一个标签页中并排打开多个真实 AI 官方网页。草稿只保留在工作台；点击发送后，扩展预检全部目标，再并发写入并触发各官网发送按钮。
 
 ## 产品边界
 
 - 展示真实官网，不自行渲染聊天界面或回答。
 - 使用浏览器中各站点已有的登录状态，不读取或复制 Cookie。
 - 只操作网页 DOM，不调用模型 API、站点内部接口或保存 API Key。
-- 本地历史只保存发送内容、时间、目标站点和逐站结果，不恢复旧网页会话。
+- 本地历史按 Session 和 Turn 保存提问、逐站发送状态及可见的最终回复纯文本。
+- 只有“新任务”会在已打开官网中触发新建对话；普通连续发送保持同一上下文。
+- 历史可通过版本化 `.maiw.jsonl` 文件整体导入和导出。
 - 站点不能稳定嵌入时，降级到普通浏览器标签页继续统一发送。
 
 预配置站点：DeepSeek、Kimi、Coze、ChatGPT、Claude、通义千问、MiniMax。DeepSeek 与 Kimi 默认打开，其余站点由用户在工作台内添加。

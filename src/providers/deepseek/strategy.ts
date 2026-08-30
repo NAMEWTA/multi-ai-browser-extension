@@ -1,5 +1,5 @@
 import { BaseDomStrategy } from "../../core/providers/base-dom-strategy";
-import type { FrameContext, PromptPayload } from "../../core/providers/contracts";
+import type { FrameContext, ResponseBaseline } from "../../core/providers/contracts";
 import { findFirstUsable, readComposerValue, waitForElement } from "../../core/providers/dom";
 import { ProviderError } from "../../core/providers/errors";
 import { deepseekDefinition } from "./definition";
@@ -12,7 +12,8 @@ export class DeepSeekStrategy extends BaseDomStrategy {
     super(deepseekDefinition, deepseekSelectors);
   }
 
-  override async writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void> {
+  override async prepareSubmit(ctx: FrameContext): Promise<ResponseBaseline> {
+    const baseline = await super.prepareSubmit(ctx);
     const composer = await waitForElement(ctx.document, deepseekSelectors.composer, {
       signal: ctx.signal,
       timeoutMs: ctx.timeoutMs,
@@ -24,7 +25,7 @@ export class DeepSeekStrategy extends BaseDomStrategy {
     } else if (this.busyControlSignature && signature !== this.busyControlSignature) {
       this.busyControlSignature = undefined;
     }
-    await super.writePrompt(ctx, prompt);
+    return baseline;
   }
 
   override async submit(ctx: FrameContext): Promise<void> {

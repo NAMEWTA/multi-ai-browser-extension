@@ -1,231 +1,197 @@
 # Multi AI Workspace 技术架构
 
-> 状态：当前唯一技术基线  
-> 版本：3.2
+> 状态：当前唯一技术基线
+> 版本：4.0
 > 更新日期：2026-08-30
 
 ## 1. 架构结论
 
-采用 WXT + React + TypeScript + Manifest V3。扩展页负责工作台 UI，第三方网页在独立 iframe 中运行；注入到各站点 frame 的 Content Script 负责定位和操作原生 DOM；Service Worker 负责工作台、frame 和普通标签页之间的可信路由。
+项目使用 WXT、React、TypeScript 和 Manifest V3。扩展页只负责编排和展示容器；真实 AI 官网在 iframe 或普通标签页中运行；Provider Content Script 在对应网页上下文内操作原生 DOM；Service Worker 校验身份、维护 frame 绑定并编排两阶段发送。
 
 ```text
 Workspace extension page
-  ├─ UI state / settings / send history
-  ├─ Provider iframe windows
-  └─ runtime commands
-           │
+  ├─ React UI + Zustand workspace state
+  ├─ Dexie Session / Turn / Exchange history
+  └─ provider iframe containers
+             │ runtime messages
 MV3 Service Worker
-  ├─ tab and frame registry
-  ├─ task routing and deduplication
-  ├─ host permission and DNR rules
-  └─ fallback tab bindings
-           │
-Provider Content Scripts
-  ├─ probe page state
-  ├─ locate native composer
-  ├─ write and asynchronously verify text
-  └─ submit once, confirm site state and report result
+  ├─ frame / fallback-tab registry
+  ├─ strict prepare barrier + concurrent commit
+  ├─ response event forwarding
+  └─ session DNR iframe policy
+             │ Port or frame message
+Provider Content Script
+  ├─ readiness and zero-mutation preflight
+  ├─ native composer write/readback/submit
+  ├─ official new-conversation action
+  └─ visible assistant-response capture
 ```
 
-## 2. 浏览器事实与约束
+工作台父页面不能直接访问跨域 iframe DOM。所有网页操作只能在匹配官网 origin 的 Content Script 中执行。
 
-### 2.1 跨域 DOM
+## 2. 消息协议
 
-工作台父页面不能直接读取跨域 iframe DOM。Provider Content Script 必须注入匹配的 frame，并通过 `chrome.runtime` Port 或严格校验的窗口消息接收命令。
+所有跨边界消息使用 Zod 验证，并校验 `panelId`、Provider、sender tab、frameId 和已登记 origin。
 
-### 2.2 iframe 限制
+| 消息                        | 方向                | 作用                       |
+| --------------------------- | ------------------- | -------------------------- |
+| `FRAME_HELLO`               | Provider -> Worker  | 注册或恢复面板绑定         |
+| `FRAME_STATUS`              | Provider -> Worker  | 上报加载、登录和就绪状态   |
+| `WORKSPACE_SUBMIT`          | Workspace -> Worker | 冻结一轮发送及全部目标     |
+| `PREPARE_PROMPT`            | Worker -> Provider  | 无副作用预检并取得回复基线 |
+| `COMMIT_PROMPT`             | Worker -> Provider  | 写入、回读、点击并开始采集 |
+| `PROVIDER_RESPONSE_UPDATE`  | Provider -> Worker  | 上报等待、流式文本或终态   |
+| `WORKSPACE_RESPONSE_UPDATE` | Worker -> Workspace | 转发回复更新并写入历史     |
+| `WORKSPACE_NEW_SESSION`     | Workspace -> Worker | 请求全部已打开面板新建会话 |
+| `START_NEW_CONVERSATION`    | Worker -> Provider  | 点击并确认官网新对话       |
+| `OPEN_PANEL_TAB`            | Workspace -> Worker | 使用普通标签页降级         |
 
-AI 网站可能返回 `X-Frame-Options` 或 CSP `frame-ancestors`。Chrome DNR 可以修改响应头，但这只是浏览器扩展能力，不代表网站承诺兼容。规则必须：
+协议中不存在草稿同步命令。输入事件不会跨越工作台边界。
 
-- 只针对用户已打开的精确站点。
-- 只作用于工作台 tab 的 `sub_frame` 请求。
-- 使用 session rules，工作台关闭后清理。
-- 不删除与嵌入无关的安全响应头。
-- 失败时转入普通标签页，不呈现空白伪成功状态。
+## 3. 两阶段发送
 
-### 2.3 Cookie 与站点存储
+### 3.1 冻结
 
-扩展不使用 `chrome.cookies` 读取或复制 Cookie。Chrome 官方说明：当顶层页面是 `chrome-extension://` 且扩展拥有被嵌站点的 host permission 时，被嵌站点可获得其顶层存储分区；第三方 Cookie 也不会仅因扩展顶层页面而被阻断。仍需逐站验证重定向、SSO、组织账号和分区 Cookie 行为。
+点击发送时工作台生成不可变的 `sessionId` 和 `turnId`，冻结经过 trim 的 prompt 与目标快照，并先创建本地 Turn/Exchange 记录。
 
-### 2.4 MV3 生命周期
+### 3.2 Prepare barrier
 
-Service Worker 会被随时回收。frame 绑定不能只存在内存中：
+Worker 并发向全部目标发送 `PREPARE_PROMPT`。Provider 必须完成：
 
-- 使用 `chrome.storage.session` 保存运行快照。
-- Content Script 建立长连接并定期发送 heartbeat。
-- 恢复时通过 tab/frame URL 和 Provider origin 重新发现。
-- 所有命令携带 `taskId`，Provider frame 持有有界幂等账本。
+1. URL、登录和 composer 就绪检查。
+2. composer 为空检查，禁止覆盖官网中的用户草稿。
+3. 上一条回复不处于生成状态。
+4. 可见发送控件存在；允许空输入时原生 disabled。
+5. 记录当前可见 assistant response 的数量和最后文本，作为本轮基线。
 
-## 3. 模块边界
+Prepare 不聚焦、不写入、不点击。如果任一结果不是 `prepared/duplicate`，Worker 把其他成功预检结果转换为 `aborted` 并直接返回，整个批次零点击。
+
+### 3.3 Concurrent commit
+
+全部通过后，Worker 并发发送 `COMMIT_PROMPT`。每个 Provider 串行执行：
 
 ```text
-src/
-  core/
-    messaging/          版本化命令与事件协议
-    orchestration/      Provider 侧任务幂等
-    permissions/        session DNR frame 策略
-    providers/          稳定合同、注册表和 DOM 工具
-  providers/<id>/       站点定义、selector、策略和测试 fixture
-  runtime/              Port、frame 状态和恢复
-  db/                   仅发送快照和逐站结果
-  entrypoints/
-    background.ts       MV3 Service Worker
-    provider-bridge.*   内置站点 Content Script
-    workspace/          全页工作台
+write native composer
+  -> dispatch native input/change events
+  -> read back normalized text
+  -> locate enabled semantic send control near composer
+  -> click once
+  -> confirm composer/page/control state changed
+  -> launch response capture outside command queue
 ```
 
-依赖只能由外向内：UI 和 Provider 插件依赖核心合同，核心编排不依赖具体站点。新增 Provider 不得修改广播器或历史服务中的 `switch`。
+Provider 使用 `TaskLedger` 对 `turnId` 去重。Prepare 与 Commit 使用独立 operation key，避免相同 `turnId` 的两个阶段互相抢占 pending response。
 
-## 4. 核心合同
+浏览器无法回滚已发生的跨站点击。因此“原子性”严格保证到 commit barrier；commit 内的运行时单站失败记录为部分提交，而不是虚构全局回滚。
+
+## 4. Provider 合同
 
 ```ts
-interface ProviderDefinition {
-  id: ProviderId;
-  name: string;
-  defaultUrl: string;
-  matches: readonly string[];
-  embedMode: "preferred" | "experimental" | "tab-only";
-}
-
 interface ProviderStrategy {
-  probe(context: FrameContext): Promise<ProbeResult>;
-  waitUntilReady(context: FrameContext): Promise<void>;
-  writePrompt(context: FrameContext, prompt: PromptPayload): Promise<void>;
-  submit(context: FrameContext): Promise<void>;
+  probe(ctx: FrameContext): Promise<ProbeResult>;
+  waitUntilReady(ctx: FrameContext): Promise<void>;
+  prepareSubmit(ctx: FrameContext): Promise<ResponseBaseline>;
+  writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
+  submit(ctx: FrameContext): Promise<void>;
+  captureResponse(ctx, baseline, onUpdate): Promise<ResponseCaptureUpdate>;
+  startNewConversation(ctx: FrameContext): Promise<void>;
 }
 ```
 
-`writePrompt` 和 `submit` 分离，因为全局输入同步与最终发送是两个不同动作。工作台每次输入变化只发 `SYNC_PROMPT`；只有显式点击发送或按下 Enter 才发 `SUBMIT_PROMPT`。
+### 4.1 Plugin + Registry
 
-## 5. 命令与状态模型
+每个站点由 `definition + selectors + strategy` 组成，通过 Registry 自动发现。核心发送器、数据库和 UI 不包含站点 `switch`。
 
-### 5.1 命令
+### 4.2 Template Method
 
-- `WORKSPACE_READY`：建立工作台 tab 和 iframe 规则。
-- `FRAME_HELLO`：frame 声明 Provider、URL 和能力。
-- `SYNC_PROMPT`：写入并回读验证，不发送。
-- `SUBMIT_PROMPT`：提交当前已同步文字，一次性命令。
-- `OPEN_PANEL_TAB`：进入普通标签页降级。
-- `FRAME_STATUS`：上报加载、登录、就绪和错误。
+`BaseDomStrategy` 固化预检、原生写入、提交确认、回复稳定判定和新会话确认。站点策略仅覆写特殊编辑器或复用控件行为。
 
-所有跨边界消息使用 Zod 校验。发送命令同时校验 `panelId`、`providerId`、`taskId`、sender tab、frameId 和 origin。
+Kimi Lexical 使用浏览器原生编辑命令并回读，不直接伪造 React/Lexical 内部状态。DeepSeek 的圆形控件会在“发送/停止”之间复用：Prepare 在空 composer 时记录控件指纹，Commit 写入后只有指纹发生变化才允许点击。
 
-### 5.2 面板状态
+### 4.3 Selector 顺序
 
-```text
-loading -> ready -> syncing -> ready -> submitting -> submitted -> ready
-    |         |        |          |           |
-    v         v        v          v           v
-needs-login  blocked  sync-error  submit-error  unavailable
-```
+优先级为稳定 test id、ARIA role/name、语义 data attribute、结构关系、最后才是易变 class。所有候选必须可见；实际 submit 还必须 enabled。无法唯一确认时返回结构化错误。
 
-状态转换由事件驱动，不用多个互相矛盾的布尔值表达。面板错误不改变其他面板状态。
+## 5. 回复采集
 
-### 5.3 同步节流与焦点
+提交前保存 `ResponseBaseline { count, lastText }`。提交后 Content Script 轮询/观察可见 assistant response：
 
-- 输入变化以 700ms trailing debounce 广播，避免富文本网页在连续输入期间反复抢占焦点。
-- 每个面板只保留最新 `revision`，丢弃过期写入。
-- IME composition 期间不广播，`compositionend` 后立即同步。
-- 原生 textarea/input 通过 setter 和事件无焦点写入；Kimi Lexical 等受控富文本编辑器允许在闲置同步事务中短暂聚焦。
-- 工作台在同步前保存全局输入框的焦点、selectionStart 和 selectionEnd，并在最新 revision 完成后恢复；过期任务不得恢复旧选区。
-- Provider 收到发送命令后再次写入并回读最终文本，再触发该网页的一次原生提交。
-- 用户可在面板内手动修改；下一次全局输入会明确覆盖当前启用面板的输入内容。
+- 新节点出现或最后文本相对基线变化后进入 `streaming`。
+- 文本每次变化上报最新纯文本。
+- 生成/停止控件消失且文本稳定 1.8 秒后标记 `completed`。
+- 达到站点回复超时后，有文本记为 `partial`，无文本记为 `timeout`。
+- 没有配置回复 selector 的站点记为 `unsupported`。
 
-### 5.4 原生网页尺寸
+采集只使用 DOM 可见文本，不读取 Cookie、localStorage、IndexedDB、Fetch/XHR 或内部 API。单条回复协议上限 2 MB。
 
-- iframe 始终以面板的原生 CSS 像素尺寸渲染，禁止对整个第三方页面使用自动 `transform: scale()`。
-- 平铺模式使用一行 CSS Grid，站点轨道与 8px 分隔轨道交错；各站点比例之和归一化，拖动只改变相邻两轨。
-- 自适应模式按面板数量和舞台宽度选择 1 至 4 列，必要时增加纵向行，禁止页面级横向滚动。
-- `ResizeObserver` 只读取舞台的整数宽度以选择自适应列数，不改变 iframe 缩放或反向写入被观察元素尺寸，避免布局反馈循环和抖动。
-- iframe 不因布局切换、拖动或最大化而卸载；拖动期间暂时关闭 iframe pointer events，结束时一次性持久化比例。
-- 分隔条支持 Pointer Events、左右方向键和双击等分；工具栏也提供等分命令。最小比例只约束相邻轨道，防止面板缩为零宽。
+## 6. 新建会话
 
-## 6. Provider 设计模式
+“新任务”不是清空工作台输入框的别名。Worker 向所有已打开面板发送 `START_NEW_CONVERSATION`。Provider 通过语义 selector 或可访问名称定位官方按钮，点击后确认 URL 变化、旧回复减少或空会话 composer 稳定。
 
-### 6.1 Plugin + Registry
-
-每个站点是独立插件。Registry 按 URL 匹配插件并提供 UI 元数据，核心不维护站点分支。
-
-### 6.2 Template Method
-
-`BaseDomStrategy` 固化稳定流程：探测页面、等待就绪、查找可见输入框、写入、回读验证、查找语义明确的可用发送按钮、点击并等待站点状态确认。Kimi Strategy 覆写写入步骤，通过原生编辑命令与异步轮询适配 Lexical，禁止直接替换其 DOM 子节点。
-
-DeepSeek Strategy 适配其新版 `div[role=button].ds-button--primary.ds-button--circle` 控件。该控件会在“发送”和“停止生成”之间复用，因此写入前记录空输入状态下的 SVG 指纹；提交时若指纹未变化，返回 `PROVIDER_BUSY`，绝不把停止按钮当作发送按钮。所有候选仍须可见且不含 `ds-button--disabled`/`aria-disabled=true`。
-
-### 6.3 Strategy + Composition
-
-输入机制组合为 `TextareaWriter`、`ContentEditableWriter`、`ProseMirrorWriter`；提交机制组合为 `ButtonSubmitter`、`KeyboardSubmitter`。平台只声明 selector 和必要覆写，避免复制整个流程。
-
-### 6.4 Adapter
-
-Provider Strategy 把不断变化的网站 DOM 适配为稳定的 `sync`/`submit` 合同。selector 按稳定性排序：`data-testid`、ARIA role/name、语义属性、结构关系，易变 class 仅作末级候选。
-
-### 6.5 Circuit Breaker
-
-同一 Provider 连续失败达到阈值后暂停自动提交并提示刷新或降级，防止页面改版时误操作。用户手动刷新后重新 probe。
+工作台随后归档当前 active Session 并创建新 Session。失败面板显示错误并从发送目标中取消，避免新旧官网上下文混入同一轮。
 
 ## 7. 数据模型
 
-工作区状态明确区分网页生命周期和广播选择：
-
 ```ts
-interface WorkspaceState {
-  panels: WorkspacePanel[]; // 当前实际打开的 iframe
-  selectedTargetIds: string[]; // 当前参与同步和发送的 panelId
+SessionRecord {
+  id; title; createdAt; updatedAt;
+  status: "active" | "archived" | "imported";
+}
+
+TurnRecord {
+  id; sessionId; sequence; prompt; createdAt;
+  status: "preparing" | "aborted" | "waiting" | "completed" | "partial" | "failed";
+}
+
+ProviderExchangeRecord {
+  id; sessionId; turnId; panelId; providerId; providerName; targetIndex;
+  submitStatus;
+  responseStatus;
+  responseText?; submittedAt?; completedAt?; message?;
 }
 ```
 
-站点管理器只修改 `panels`；目标选择器只修改 `selectedTargetIds`。新增面板默认加入发送目标，移除面板必须同时清理目标 ID 和布局比例。取消发送目标不得卸载 iframe。旧版面板中的 `enabled` 仅作为一次性迁移来源，持久化新状态时不再写回。
+Dexie 使用数据库 `multi-ai-workspace-v3` 的 schema version 2。旧 `sendRecords` 表保留用于单次迁移；迁移完成标记写入 `metadata`，后续新功能不再写旧表。
 
-MVP 不保存回答正文，只保存发送快照：
+Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；存在有效回复和失败/超时为 `partial`；无有效回复为 `failed`。
 
-```ts
-interface SendRecord {
-  id: string;
-  taskId: string;
-  prompt: string;
-  createdAt: string;
-  targets: Array<{
-    panelId: string;
-    providerId: ProviderId;
-    providerName: string;
-    status: "submitted" | "failed" | "unavailable";
-    message?: string;
-  }>;
-}
+## 8. JSONL 交换格式
+
+文件扩展名 `.maiw.jsonl`，UTF-8，每行独立 JSON：
+
+```json
+{"type":"manifest","format":"multi-ai-workspace-history","version":1,"exportedAt":"...","counts":{"sessions":1,"turns":2,"exchanges":4}}
+{"type":"session","data":{}}
+{"type":"turn","data":{}}
+{"type":"exchange","data":{}}
 ```
 
-点击历史只打开只读详情抽屉。不得把历史条目解释为可恢复会话，也不存储 iframe 当前 URL 作为恢复承诺。
+导入上限 50 MB。解析器要求首行 manifest、唯一 manifest、清单数量一致、实体 ID 唯一、引用完整、Provider ID 受支持。全部校验通过后才在单个 Dexie 事务中写入；Session、Turn、Exchange ID 全部重映射。
 
-## 8. 权限与隐私
+## 9. 生命周期、权限与隐私
 
-- `storage`：保存设置、面板选择、发送历史和 session 快照。
-- `tabs`：打开/聚焦工作台与标签页降级。
-- `webNavigation`：发现和恢复 frame。
-- `declarativeNetRequestWithHostAccess`：仅在工作台 tab 内处理嵌入响应头。
-- `host_permissions`：只列 7 个预配置站点的精确域名，不申请可选全站权限。
+- `storage`：工作台设置、Dexie 历史和有界 runtime snapshot。
+- `tabs`：工作台聚焦和普通标签页降级。
+- `webNavigation`：发现/恢复 frame。
+- `declarativeNetRequestWithHostAccess`：只在工作台 tab 的精确 provider subframe 上处理嵌入响应头。
+- `host_permissions`：只包含预配置站点，不申请 `<all_urls>`。
 
-不申请 `cookies`，不申请 `<all_urls>` 必选权限，不上传提示词、历史或网页内容。Chrome Web Store 仍要求披露本地处理的表单内容、网页内容和浏览活动。
+不申请 `cookies` 权限。Content Script 不能直接写 `storage.session` 诊断；它只发送严格校验、无正文的诊断事件，由 Worker 验证 frame 绑定后写入每面板最多 80 条的环形记录。
 
-诊断日志只保存在 `chrome.storage.session` 的有界环形记录中，字段限于站点、面板、URL、元素指纹、操作阶段、提示词长度、耗时和错误码。Content Script 默认不能直接访问 `storage.session`，因此它只发送经过 Zod 严格校验的 `PROVIDER_DIAGNOSTIC`；Service Worker 校验 sender tab、frame 和 Provider 绑定后串行写入，每个面板最多保留 80 条。禁止记录提示词正文、Cookie、回答正文、请求体或响应体；用户可从工作台手动导出 JSON。
+## 10. 布局稳定性
 
-## 9. 测试策略
+- iframe 始终按容器原生 CSS 像素渲染，禁止 `transform: scale()`。
+- 平铺使用站点轨道与 8px 分隔轨道交错的 CSS Grid，拖动只修改相邻比例。
+- 自适应按容器整数宽度选择列数；`ResizeObserver` 不反写被观察尺寸。
+- 切换布局、拖动、最大化均不卸载 iframe。拖动期间暂时禁止 iframe pointer events。
 
-| 层级        | 验证内容                                             |
-| ----------- | ---------------------------------------------------- |
-| 单元测试    | 协议、幂等、并发隔离、DOM writer、selector、历史迁移 |
-| DOM fixture | 每个 Provider 的输入、回读、发送与错误状态           |
-| 扩展 E2E    | 站点管理、目标独立多选、两种布局、同步、发送和历史   |
-| 视觉测试    | 1280/1440/1920/2560、无横向溢出、尺寸和焦点稳定性    |
-| 容量测试    | 11 个打开站点下摘要宽度、目标搜索和完整多选清单      |
-| 真实 smoke  | 登录态、最终 URL、输入同步、一次发送、降级结果       |
+## 11. 验证分层
 
-Mock E2E 只能证明扩展编排正确，不能证明真实站点可用。真实发送测试必须使用专用测试账号、无敏感提示词并控制频率。
+| 层级             | 重点                                                        |
+| ---------------- | ----------------------------------------------------------- |
+| 单元             | Zod 协议、DOM adapter、幂等、Session 聚合、迁移、JSONL      |
+| Provider fixture | Prepare 零副作用、原生写入、唯一提交、回复完成、新对话      |
+| 扩展 E2E         | 草稿隔离、严格 barrier、同 Session 多轮、回复落库、布局稳定 |
+| 真实 smoke       | 最终 URL、登录态、真实 selector、一次发送和降级             |
 
-## 10. 参考依据
-
-- Chrome Content Scripts: https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts
-- Chrome Declarative Net Request: https://developer.chrome.com/docs/extensions/reference/api/declarativeNetRequest
-- Chrome Storage and Cookies: https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies
-- Chrome Web Store User Data FAQ: https://developer.chrome.com/docs/webstore/program-policies/user-data-faq
-- Coze iframe 限制说明: https://docs.coze.cn/guides_FAQ
+Mock E2E 证明扩展编排，不证明真实官网长期兼容。真实 smoke 必须使用专用账号、非敏感提示词并控制频率。

@@ -18,4 +18,17 @@ export const kimiSelectors = {
     "button[type='submit']",
   ],
   login: ["button[class*='login']", "a[href*='login']"],
+  responses: [
+    ".assistant-response",
+    "[data-role='assistant'] [class*='markdown']",
+    "[data-role='assistant']",
+    "[class*='segment-assistant']",
+  ],
+  generating: [
+    "button[aria-label*='停止']",
+    "button[aria-label*='Stop']",
+    ".send-button-container.stop",
+  ],
+  newConversation: ["button[aria-label*='新建会话']", "button[aria-label*='新建对话']"],
+  newConversationLabels: ["新建会话", "新建对话", "New chat"],
 } as const satisfies ProviderSelectors;

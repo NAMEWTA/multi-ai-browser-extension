@@ -25,7 +25,12 @@ export interface ProviderDefinition {
 export interface ProviderSelectors {
   readonly composer: readonly string[];
   readonly submit: readonly string[];
+  readonly submitCandidate?: readonly string[];
   readonly login?: readonly string[];
+  readonly responses?: readonly string[];
+  readonly generating?: readonly string[];
+  readonly newConversation?: readonly string[];
+  readonly newConversationLabels?: readonly string[];
 }
 
 export interface FrameContext {
@@ -33,6 +38,7 @@ export interface FrameContext {
   readonly window: Window;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  readonly responseTimeoutMs?: number;
 }
 
 export interface PromptPayload {
@@ -46,12 +52,33 @@ export interface ProbeResult {
   readonly detail?: string;
 }
 
+export interface ResponseBaseline {
+  readonly count: number;
+  readonly lastText: string;
+}
+
+export type ResponseCaptureStatus =
+  "waiting" | "streaming" | "completed" | "partial" | "timeout" | "failed" | "unsupported";
+
+export interface ResponseCaptureUpdate {
+  readonly status: ResponseCaptureStatus;
+  readonly text?: string;
+  readonly message?: string;
+}
+
 export interface ProviderStrategy {
   readonly definition: ProviderDefinition;
   probe(ctx: FrameContext): Promise<ProbeResult>;
   waitUntilReady(ctx: FrameContext): Promise<void>;
+  prepareSubmit(ctx: FrameContext): Promise<ResponseBaseline>;
   writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
   submit(ctx: FrameContext): Promise<void>;
+  captureResponse(
+    ctx: FrameContext,
+    baseline: ResponseBaseline,
+    onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
+  ): Promise<ResponseCaptureUpdate>;
+  startNewConversation(ctx: FrameContext): Promise<void>;
 }
 
 export interface ProviderPlugin {

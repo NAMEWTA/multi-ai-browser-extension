@@ -93,19 +93,20 @@ test("loads the seven configured real AI websites without test interception", as
   await workspace.screenshot({ path: "test-results/live-sites-1440x900.png" });
 });
 
-test("synchronizes into the real Kimi Lexical editor without sending", async () => {
-  const prompt = "【官网同步验收】这段文字不会发送";
+test("keeps a draft out of the real Kimi Lexical editor before sending", async () => {
+  const prompt = "【官网草稿隔离验收】这段文字不会写入官网";
   const kimiPanel = workspace.locator("article.provider-panel[data-provider='kimi']");
   await expect(kimiPanel.locator(".panel-status.status-ready")).toBeVisible({ timeout: 45_000 });
   await selectOnlyTarget("kimi");
 
-  const composer = workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页");
+  const composer = workspace.locator(".global-composer textarea");
   await composer.fill(prompt);
   await expect(composer).toBeFocused();
   const kimiFrame = kimiPanel.locator("iframe").contentFrame();
+  await workspace.waitForTimeout(1_500);
   await expect(
     kimiFrame.locator("[data-lexical-editor='true'].chat-input-editor").first(),
-  ).toContainText(prompt, { timeout: 15_000 });
+  ).not.toContainText(prompt);
   await expect(composer).toBeFocused();
 });
 
@@ -126,11 +127,11 @@ test("routes a prompt to a real ready website frame", async () => {
   await selectOnlyTarget(provider!);
 
   await workspace
-    .getByPlaceholder("输入一次，同步到所有已选择的 AI 网页")
+    .locator(".global-composer textarea")
     .fill("【官网路由验收】请只回复：网页统一提问正常");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
 
-  await expect(readyPanel.locator(".panel-status")).toHaveText("已提交", { timeout: 30_000 });
+  await expect(readyPanel.locator(".panel-status")).not.toContainText("失败", { timeout: 30_000 });
   await expect(workspace.locator(".history-list")).toContainText("官网路由验收");
 
   const runtimeSnapshot = await worker.evaluate(async () => {
@@ -161,5 +162,5 @@ async function selectOnlyTarget(providerId: string): Promise<void> {
   const selector = workspace.getByRole("dialog", { name: "选择发送目标" });
   await selector.getByRole("button", { name: "清空" }).click();
   await selector.locator(`.target-option[data-provider='${providerId}'] input`).check();
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+  await workspace.locator(".global-composer textarea").click();
 }

@@ -18,15 +18,36 @@ import {
   Send,
   Scaling,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { browser } from "wxt/browser";
 import type { ProviderRunResult } from "../../core/messaging/protocol";
-import { workspaceFrameStatusSchema } from "../../core/messaging/protocol";
+import {
+  workspaceFrameStatusSchema,
+  workspaceResponseUpdateSchema,
+} from "../../core/messaging/protocol";
 import { providerRegistry } from "../../core/providers/registry";
 import type { ProviderDefinition } from "../../core/providers/contracts";
-import { deleteSendRecord, listSendRecords, saveSendRecord } from "../../db/history-service";
-import type { SendRecord } from "../../db/database";
+import type { ProviderExchangeRecord, SessionRecord } from "../../db/database";
+import {
+  applyResponseUpdate,
+  applySubmitResults,
+  createSession,
+  createTurn,
+  deleteSession,
+  ensureActiveSession,
+  getSessionDetail,
+  listSessions,
+  migrateLegacyHistory,
+  type SessionDetail,
+} from "../../db/session-service";
+import {
+  exportHistoryJsonl,
+  HISTORY_FILE_EXTENSION,
+  importHistoryJsonl,
+  MAX_HISTORY_IMPORT_BYTES,
+} from "../../db/history-transfer";
 import { useWorkspaceStore, type WorkspacePanel } from "./workspace-store";
 
 export function WorkspaceApp() {
@@ -42,27 +63,28 @@ export function WorkspaceApp() {
   const [prompt, setPrompt] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
-  const [composing, setComposing] = useState(false);
+  const [startingSession, setStartingSession] = useState(false);
   const [maximized, setMaximized] = useState<string>();
-  const [history, setHistory] = useState<SendRecord[]>([]);
+  const [history, setHistory] = useState<SessionRecord[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
-  const [details, setDetails] = useState<SendRecord>();
+  const [details, setDetails] = useState<SessionDetail>();
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [layoutResetKey, setLayoutResetKey] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const editedRef = useRef(false);
-  const syncRevisionRef = useRef(0);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const refreshHistory = useCallback(async () => {
-    setHistory(await listSendRecords());
+    setHistory(await listSessions());
   }, []);
 
   useEffect(() => {
     let mounted = true;
     void hydrate();
-    void listSendRecords().then((records) => {
-      if (mounted) setHistory(records);
-    });
+    void migrateLegacyHistory()
+      .then(() => listSessions())
+      .then((records) => {
+        if (mounted) setHistory(records);
+      });
     void browser.runtime.sendMessage({ type: "WORKSPACE_READY" }).then((response) => {
       if (mounted && (response as { ok?: boolean } | undefined)?.ok) setRuntimeReady(true);
     });
@@ -73,73 +95,61 @@ export function WorkspaceApp() {
 
   useEffect(() => {
     const listener = (raw: unknown) => {
-      const parsed = workspaceFrameStatusSchema.safeParse(raw);
-      if (!parsed.success) return undefined;
-      const current = useWorkspaceStore
-        .getState()
-        .panels.find((panel) => panel.id === parsed.data.panelId);
-      if (
-        parsed.data.status === "ready" &&
-        current &&
-        current.status !== "loading" &&
-        current.status !== "needs-login" &&
-        current.status !== "blocked"
-      ) {
+      const frameStatus = workspaceFrameStatusSchema.safeParse(raw);
+      if (frameStatus.success) {
+        const current = useWorkspaceStore
+          .getState()
+          .panels.find((panel) => panel.id === frameStatus.data.panelId);
+        if (
+          frameStatus.data.status === "ready" &&
+          current &&
+          current.status !== "loading" &&
+          current.status !== "needs-login" &&
+          current.status !== "blocked"
+        ) {
+          return { ok: true };
+        }
+        setPanelStatus(frameStatus.data.panelId, frameStatus.data.status, frameStatus.data.message);
         return { ok: true };
       }
-      setPanelStatus(parsed.data.panelId, parsed.data.status, parsed.data.message);
+
+      const response = workspaceResponseUpdateSchema.safeParse(raw);
+      if (!response.success) return undefined;
+      const data = response.data;
+      setPanelStatus(
+        data.panelId,
+        data.status === "waiting" || data.status === "streaming"
+          ? "submitted"
+          : data.status === "failed"
+            ? "error"
+            : "ready",
+        data.message,
+      );
+      void applyResponseUpdate(
+        data.turnId,
+        data.panelId,
+        data.status,
+        data.text,
+        data.message,
+      ).then(async () => {
+        await refreshHistory();
+        if (details?.session.id === data.sessionId)
+          setDetails(await getSessionDetail(data.sessionId));
+      });
       return { ok: true };
     };
     browser.runtime.onMessage.addListener(listener);
     return () => browser.runtime.onMessage.removeListener(listener);
-  }, [setPanelStatus]);
+  }, [details?.session.id, refreshHistory, setPanelStatus]);
 
   const activeMaximized = panels.some((panel) => panel.id === maximized) ? maximized : undefined;
-  const targetSignature = panels
-    .filter((panel) => selectedTargetIds.includes(panel.id))
-    .map((panel) => `${panel.id}:${panel.providerId}:${panel.revision}`)
-    .join("|");
-
-  useEffect(() => {
-    if (!runtimeReady || !hydrated || composing || !editedRef.current) return;
-    const timer = window.setTimeout(() => {
-      if (!editedRef.current) return;
-      const targets = currentTargets();
-      if (!targets.length) return;
-      const revision = ++syncRevisionRef.current;
-      const restoreFocus = document.activeElement === inputRef.current;
-      const selectionStart = inputRef.current?.selectionStart ?? null;
-      const selectionEnd = inputRef.current?.selectionEnd ?? null;
-      for (const target of targets) setPanelStatus(target.panelId, "syncing");
-      void browser.runtime
-        .sendMessage({ type: "WORKSPACE_SYNC", revision, prompt, targets })
-        .then((raw) => {
-          if (revision !== syncRevisionRef.current) return;
-          for (const result of raw as ProviderRunResult[]) {
-            setPanelStatus(
-              result.panelId,
-              result.status === "synced" || result.status === "duplicate" ? "ready" : "error",
-              result.message,
-            );
-          }
-          if (restoreFocus && inputRef.current) {
-            inputRef.current.focus({ preventScroll: true });
-            if (selectionStart !== null && selectionEnd !== null) {
-              inputRef.current.setSelectionRange(selectionStart, selectionEnd);
-            }
-          }
-        });
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [prompt, composing, targetSignature, hydrated, runtimeReady, setPanelStatus]);
-
   const filteredHistory = useMemo(() => {
     const query = historyQuery.trim().toLocaleLowerCase();
     if (!query) return history;
     return history.filter(
       (record) =>
-        record.prompt.toLocaleLowerCase().includes(query) ||
-        record.targets.some((target) => target.providerName.toLocaleLowerCase().includes(query)),
+        record.title.toLocaleLowerCase().includes(query) ||
+        record.status.toLocaleLowerCase().includes(query),
     );
   }, [history, historyQuery]);
 
@@ -161,15 +171,23 @@ export function WorkspaceApp() {
     const text = prompt.trim();
     const targets = currentTargets();
     if (!text || !targets.length || sending) return;
-    const taskId = crypto.randomUUID();
+    const session = await ensureActiveSession(text);
+    const turn = await createTurn(
+      session.id,
+      text,
+      targets.map((target) => ({
+        panelId: target.panelId,
+        providerId: target.providerId,
+        providerName: providerRegistry.get(target.providerId).definition.name,
+      })),
+    );
     setSending(true);
-    editedRef.current = false;
-    syncRevisionRef.current += 1;
     for (const target of targets) setPanelStatus(target.panelId, "submitting");
     try {
       const results = (await browser.runtime.sendMessage({
         type: "WORKSPACE_SUBMIT",
-        taskId,
+        sessionId: session.id,
+        turnId: turn.id,
         prompt: text,
         targets,
       })) as ProviderRunResult[];
@@ -178,37 +196,105 @@ export function WorkspaceApp() {
           result.panelId,
           result.status === "submitted" || result.status === "duplicate"
             ? "submitted"
-            : result.errorCode === "LOGIN_REQUIRED"
-              ? "needs-login"
-              : result.status === "unavailable"
-                ? "unavailable"
-                : "error",
+            : result.status === "aborted"
+              ? "ready"
+              : result.errorCode === "LOGIN_REQUIRED"
+                ? "needs-login"
+                : result.status === "unavailable"
+                  ? "unavailable"
+                  : "error",
           result.message,
         );
       }
-      await saveSendRecord(
-        taskId,
-        text,
-        targets.map((target) => ({
-          panelId: target.panelId,
-          providerId: target.providerId,
-          providerName: providerRegistry.get(target.providerId).definition.name,
-        })),
-        results,
+      await applySubmitResults(turn.id, results);
+      await refreshHistory();
+      if (
+        results.some((result) => result.status === "submitted" || result.status === "duplicate")
+      ) {
+        setPrompt("");
+      }
+      inputRef.current?.focus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "发送事务失败";
+      await applySubmitResults(
+        turn.id,
+        targets.map((target) => ({ panelId: target.panelId, status: "unavailable", message })),
       );
       await refreshHistory();
-      setPrompt("");
-      inputRef.current?.focus();
     } finally {
       setSending(false);
     }
   }
 
-  async function removeHistory(record: SendRecord) {
-    if (!window.confirm("删除这条发送记录？")) return;
-    await deleteSendRecord(record.id);
-    if (details?.id === record.id) setDetails(undefined);
+  async function startNewTask() {
+    if (sending || startingSession) return;
+    setStartingSession(true);
+    const sessionId = crypto.randomUUID();
+    const targets = useWorkspaceStore.getState().panels.map((panel) => ({
+      panelId: panel.id,
+      providerId: panel.providerId,
+      url: providerRegistry.get(panel.providerId).definition.defaultUrl,
+    }));
+    try {
+      const results = targets.length
+        ? ((await browser.runtime.sendMessage({
+            type: "WORKSPACE_NEW_SESSION",
+            sessionId,
+            targets,
+          })) as ProviderRunResult[])
+        : [];
+      for (const result of results) {
+        const succeeded = result.status === "submitted" || result.status === "duplicate";
+        setPanelStatus(result.panelId, succeeded ? "ready" : "error", result.message);
+        if (!succeeded && useWorkspaceStore.getState().selectedTargetIds.includes(result.panelId)) {
+          useWorkspaceStore.getState().toggleTarget(result.panelId);
+        }
+      }
+      await createSession("", sessionId);
+      setPrompt("");
+      setDetails(undefined);
+      await refreshHistory();
+      inputRef.current?.focus();
+    } finally {
+      setStartingSession(false);
+    }
+  }
+
+  async function openHistory(record: SessionRecord) {
+    setDetails(await getSessionDetail(record.id));
+  }
+
+  async function removeHistory(record: SessionRecord) {
+    if (!window.confirm("删除这个会话及其全部问答记录？")) return;
+    await deleteSession(record.id);
+    if (details?.session.id === record.id) setDetails(undefined);
     await refreshHistory();
+  }
+
+  async function exportHistory() {
+    const blob = new Blob([await exportHistoryJsonl()], {
+      type: "application/x-ndjson;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `multi-ai-history-${new Date().toISOString().slice(0, 10)}${HISTORY_FILE_EXTENSION}`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  async function importHistory(file: File) {
+    if (file.size > MAX_HISTORY_IMPORT_BYTES) {
+      window.alert("历史文件不能超过 50 MB");
+      return;
+    }
+    try {
+      const summary = await importHistoryJsonl(await file.text());
+      await refreshHistory();
+      window.alert(`已导入 ${summary.sessions} 个会话、${summary.turns} 轮问答`);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "历史文件导入失败");
+    }
   }
 
   async function exportDiagnostics() {
@@ -250,14 +336,10 @@ export function WorkspaceApp() {
           <button
             className="new-task-button"
             type="button"
-            onClick={() => {
-              editedRef.current = false;
-              setPrompt("");
-              setDetails(undefined);
-              inputRef.current?.focus();
-            }}
+            disabled={sending || startingSession}
+            onClick={() => void startNewTask()}
           >
-            <Plus size={17} />
+            {startingSession ? <RefreshCw className="spin" size={17} /> : <Plus size={17} />}
             新任务
           </button>
           <label className="history-search">
@@ -266,25 +348,29 @@ export function WorkspaceApp() {
               type="search"
               value={historyQuery}
               onChange={(event) => setHistoryQuery(event.target.value)}
-              placeholder="搜索发送记录"
-              aria-label="搜索发送记录"
+              placeholder="搜索会话"
+              aria-label="搜索会话"
             />
           </label>
           <div className="sidebar-section-title">
             <History size={14} />
-            最近发送
+            最近会话
           </div>
           <div className="history-list">
             {filteredHistory.length ? (
               filteredHistory.map((record) => (
                 <div
-                  className={`history-row ${details?.id === record.id ? "active" : ""}`}
+                  className={`history-row ${details?.session.id === record.id ? "active" : ""}`}
                   key={record.id}
                 >
-                  <button className="history-item" type="button" onClick={() => setDetails(record)}>
-                    <span>{record.prompt}</span>
+                  <button
+                    className="history-item"
+                    type="button"
+                    onClick={() => void openHistory(record)}
+                  >
+                    <span>{record.title}</span>
                     <small>
-                      {record.targets.length} 个站点 · {formatTime(record.createdAt)}
+                      {sessionStatusLabel(record.status)} · {formatTime(record.updatedAt)}
                     </small>
                   </button>
                   <button
@@ -299,8 +385,31 @@ export function WorkspaceApp() {
                 </div>
               ))
             ) : (
-              <p className="empty-copy">统一发送后，记录会保存在这里。</p>
+              <p className="empty-copy">统一发送后，会话和回复会保存在这里。</p>
             )}
+          </div>
+          <div className="history-transfer-actions">
+            <button type="button" onClick={() => void exportHistory()} title="导出全部会话">
+              <Download size={14} /> 导出
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              title="导入会话文件"
+            >
+              <Upload size={14} /> 导入
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              hidden
+              accept={`${HISTORY_FILE_EXTENSION},application/x-ndjson,application/jsonl,text/plain`}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void importHistory(file);
+              }}
+            />
           </div>
         </aside>
       )}
@@ -383,13 +492,8 @@ export function WorkspaceApp() {
               ref={inputRef}
               value={prompt}
               rows={1}
-              placeholder="输入一次，同步到所有已选择的 AI 网页"
-              onChange={(event) => {
-                editedRef.current = true;
-                setPrompt(event.target.value);
-              }}
-              onCompositionStart={() => setComposing(true)}
-              onCompositionEnd={() => setComposing(false)}
+              placeholder="输入完成后点击发送，将一次性提交到已选择的 AI 网页"
+              onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
@@ -440,7 +544,7 @@ export function WorkspaceApp() {
       </section>
 
       {pickerOpen && <ProviderPicker onClose={() => setPickerOpen(false)} />}
-      {details && <HistoryDetail record={details} onClose={() => setDetails(undefined)} />}
+      {details && <SessionHistoryDetail detail={details} onClose={() => setDetails(undefined)} />}
     </div>
   );
 }
@@ -656,7 +760,7 @@ export function TargetSelector({ panels }: { panels: WorkspacePanel[] }) {
           <header>
             <div>
               <strong>发送目标</strong>
-              <span>只同步并发送到勾选的网页</span>
+              <span>只在点击发送后提交到勾选的网页</span>
             </div>
             <div className="target-bulk-actions">
               <button type="button" onClick={() => setAllTargets(true)}>
@@ -927,46 +1031,66 @@ function ProviderPicker({ onClose }: { onClose(): void }) {
   );
 }
 
-function HistoryDetail({ record, onClose }: { record: SendRecord; onClose(): void }) {
+function SessionHistoryDetail({ detail, onClose }: { detail: SessionDetail; onClose(): void }) {
   return (
     <div className="detail-backdrop" role="presentation" onMouseDown={onClose}>
       <aside
         className="history-detail"
         role="dialog"
         aria-modal="true"
-        aria-label="发送记录详情"
+        aria-label="会话历史详情"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header>
           <div>
-            <strong>发送记录</strong>
-            <span>{formatFullTime(record.createdAt)}</span>
+            <strong>{detail.session.title}</strong>
+            <span>
+              {detail.turns.length} 轮问答 · {formatFullTime(detail.session.createdAt)}
+            </span>
           </div>
           <button type="button" title="关闭" aria-label="关闭" onClick={onClose}>
             <X size={17} />
           </button>
         </header>
-        <div className="detail-content">
-          <section>
-            <span>发送内容</span>
-            <p>{record.prompt}</p>
-          </section>
-          <section>
-            <span>当时打开的网页</span>
-            <div className="delivery-list">
-              {record.targets.map((target) => (
-                <div key={target.panelId}>
-                  <ProviderMark definition={providerRegistry.get(target.providerId).definition} />
-                  <strong>{target.providerName}</strong>
-                  <span className={`delivery-status status-${target.status}`}>
-                    {deliveryLabel(target.status)}
-                  </span>
-                  {target.message && <small>{target.message}</small>}
-                </div>
-              ))}
-            </div>
-          </section>
-          <p className="history-notice">这是一条发送快照，不会恢复当时的网页或原始会话。</p>
+        <div className="detail-content session-timeline">
+          {detail.turns.map(({ turn, exchanges }) => (
+            <article className="turn-record" key={turn.id}>
+              <header>
+                <strong>第 {turn.sequence} 轮</strong>
+                <span>
+                  {formatFullTime(turn.createdAt)} · {turnStatusLabel(turn.status)}
+                </span>
+              </header>
+              <section className="turn-prompt">
+                <span>我的提问</span>
+                <p>{turn.prompt}</p>
+              </section>
+              <div className="exchange-list">
+                {exchanges.map((exchange) => (
+                  <section className="exchange-record" key={exchange.id}>
+                    <header>
+                      <ProviderMark
+                        definition={providerRegistry.get(exchange.providerId).definition}
+                      />
+                      <strong>{exchange.providerName}</strong>
+                      <span className={`delivery-status status-${exchange.responseStatus}`}>
+                        {exchangeStatusLabel(exchange)}
+                      </span>
+                    </header>
+                    {exchange.responseText ? (
+                      <p>{exchange.responseText}</p>
+                    ) : (
+                      <p className="response-placeholder">
+                        {exchange.message ?? responsePlaceholder(exchange.responseStatus)}
+                      </p>
+                    )}
+                    {exchange.message && exchange.responseText && <small>{exchange.message}</small>}
+                  </section>
+                ))}
+              </div>
+            </article>
+          ))}
+          {detail.turns.length === 0 && <p className="history-notice">这个会话还没有发送内容。</p>}
         </div>
       </aside>
     </div>
@@ -989,8 +1113,7 @@ function statusLabel(status: WorkspacePanel["status"]): string {
     loading: "载入中",
     "needs-login": "需登录",
     blocked: "无法嵌入",
-    ready: "可同步",
-    syncing: "同步中",
+    ready: "就绪",
     submitting: "发送中",
     submitted: "已发送",
     error: "失败",
@@ -998,8 +1121,54 @@ function statusLabel(status: WorkspacePanel["status"]): string {
   }[status];
 }
 
-function deliveryLabel(status: SendRecord["targets"][number]["status"]): string {
-  return { submitted: "已发送", failed: "失败", unavailable: "未连接" }[status];
+function sessionStatusLabel(status: SessionRecord["status"]): string {
+  return { active: "当前会话", archived: "已归档", imported: "已导入" }[status];
+}
+
+function turnStatusLabel(status: SessionDetail["turns"][number]["turn"]["status"]): string {
+  return {
+    preparing: "预检中",
+    aborted: "已取消",
+    waiting: "等待回复",
+    completed: "已完成",
+    partial: "部分完成",
+    failed: "失败",
+  }[status];
+}
+
+function exchangeStatusLabel(exchange: ProviderExchangeRecord): string {
+  if (exchange.submitStatus !== "submitted") {
+    return (
+      {
+        pending: "待发送",
+        prepared: "已预检",
+        aborted: "未发送",
+        failed: "发送失败",
+        unavailable: "未连接",
+      }[exchange.submitStatus] ?? "已发送"
+    );
+  }
+  return {
+    waiting: "等待回复",
+    streaming: "回复中",
+    completed: "已完成",
+    partial: "部分回复",
+    timeout: "采集超时",
+    failed: "采集失败",
+    unsupported: "暂不支持采集",
+  }[exchange.responseStatus];
+}
+
+function responsePlaceholder(status: ProviderExchangeRecord["responseStatus"]): string {
+  return {
+    waiting: "正在等待该站点开始回复...",
+    streaming: "正在采集回复...",
+    completed: "该站点没有可见的回复文本",
+    partial: "仅采集到部分回复",
+    timeout: "等待回复超时",
+    failed: "回复采集失败",
+    unsupported: "当前站点暂不支持回复采集",
+  }[status];
 }
 
 function formatTime(value: string): string {

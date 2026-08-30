@@ -1,12 +1,27 @@
 import { ProviderError } from "./errors";
 
 export function isElementUsable(element: Element): element is HTMLElement {
+  if (!isElementVisible(element)) return false;
+  if ("disabled" in element && Boolean(element.disabled)) return false;
+  return true;
+}
+
+export function isElementVisible(element: Element): element is HTMLElement {
   if (!(element instanceof HTMLElement)) return false;
   if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-  if (style?.display === "none" || style?.visibility === "hidden") return false;
-  if ("disabled" in element && Boolean(element.disabled)) return false;
-  return true;
+  return !(style?.display === "none" || style?.visibility === "hidden");
+}
+
+export function findFirstVisible(
+  document: Document,
+  selectors: readonly string[],
+): HTMLElement | undefined {
+  for (const selector of selectors) {
+    const candidate = [...document.querySelectorAll(selector)].find(isElementVisible);
+    if (candidate) return candidate;
+  }
+  return undefined;
 }
 
 export function findFirstUsable(
@@ -21,6 +36,44 @@ export function findFirstUsable(
     return candidates.toSorted(
       (left, right) => domDistance(anchor, left) - domDistance(anchor, right),
     )[0];
+  }
+  return undefined;
+}
+
+export function findAllUsable(document: Document, selectors: readonly string[]): HTMLElement[] {
+  const seen = new Set<HTMLElement>();
+  const elements: HTMLElement[] = [];
+  for (const selector of selectors) {
+    for (const candidate of document.querySelectorAll(selector)) {
+      if (!isElementUsable(candidate) || seen.has(candidate)) continue;
+      seen.add(candidate);
+      elements.push(candidate);
+    }
+  }
+  return elements.toSorted((left, right) => {
+    const position = left.compareDocumentPosition(right);
+    return position & Node.DOCUMENT_POSITION_FOLLOWING
+      ? -1
+      : position & Node.DOCUMENT_POSITION_PRECEDING
+        ? 1
+        : 0;
+  });
+}
+
+export function findUsableByText(
+  document: Document,
+  labels: readonly string[],
+): HTMLElement | undefined {
+  const normalizedLabels = labels.map((label) => normalizeComposerValue(label).toLocaleLowerCase());
+  const candidates = document.querySelectorAll("button, a, [role='button']");
+  for (const candidate of candidates) {
+    if (!isElementUsable(candidate)) continue;
+    const text = normalizeComposerValue(candidate.textContent ?? "").toLocaleLowerCase();
+    const accessibleName = normalizeComposerValue(
+      `${candidate.getAttribute("aria-label") ?? ""} ${candidate.getAttribute("title") ?? ""}`,
+    ).toLocaleLowerCase();
+    if (normalizedLabels.some((label) => text === label || accessibleName.includes(label)))
+      return candidate;
   }
   return undefined;
 }

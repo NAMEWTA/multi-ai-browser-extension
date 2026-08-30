@@ -15,4 +15,12 @@ export const claudeSelectors = {
     "button[type='submit']",
   ],
   login: ["a[href*='login']", "button[data-testid='login-button']"],
+  responses: [
+    ".assistant-response",
+    "[data-testid*='assistant']",
+    "[class*='font-claude-response']",
+  ],
+  generating: ["[data-is-streaming='true']", "button[aria-label*='Stop']"],
+  newConversation: ["a[href='/new']", "button[aria-label*='new chat' i]"],
+  newConversationLabels: ["New chat", "新对话"],
 } as const satisfies ProviderSelectors;

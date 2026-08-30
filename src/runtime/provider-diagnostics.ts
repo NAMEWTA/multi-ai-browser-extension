@@ -2,13 +2,20 @@ import { browser } from "wxt/browser";
 import type { ProviderId } from "../core/providers/contracts";
 
 export type DiagnosticStage =
-  "frame-ready" | "command-start" | "write-confirmed" | "submit-confirmed" | "command-failed";
+  | "frame-ready"
+  | "command-start"
+  | "prepare-confirmed"
+  | "write-confirmed"
+  | "submit-confirmed"
+  | "response-update"
+  | "new-session-confirmed"
+  | "command-failed";
 
 interface DiagnosticRecord {
   readonly providerId: ProviderId;
   readonly panelId: string;
   readonly stage: DiagnosticStage;
-  readonly operation?: "sync" | "submit";
+  readonly operation?: "prepare" | "submit" | "new-session" | "response";
   readonly promptLength?: number;
   readonly durationMs?: number;
   readonly composer?: string;

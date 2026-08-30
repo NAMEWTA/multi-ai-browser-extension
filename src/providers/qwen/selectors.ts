@@ -22,4 +22,17 @@ export const qwenSelectors = {
     "[class*='send' i][role='button']",
   ],
   login: ["a[href*='login']", "button[class*='login']"],
+  responses: [
+    ".assistant-response",
+    "[data-role='assistant'] .markdown-body",
+    "[data-role='assistant']",
+    "[class*='answer-content']",
+  ],
+  generating: [
+    "button[aria-label*='停止']",
+    "button[aria-label*='stop' i]",
+    "[class*='stop' i][role='button']",
+  ],
+  newConversation: ["button[aria-label*='新建对话']", "[role='button'][aria-label*='新建对话']"],
+  newConversationLabels: ["新建对话", "新对话", "New chat"],
 } as const satisfies ProviderSelectors;

@@ -7,7 +7,6 @@ export type PanelStatus =
   | "needs-login"
   | "blocked"
   | "ready"
-  | "syncing"
   | "submitting"
   | "submitted"
   | "error"

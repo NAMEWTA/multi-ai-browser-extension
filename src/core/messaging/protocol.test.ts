@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   frameStatusSchema,
+  preparePromptSchema,
   providerDiagnosticSchema,
   runtimeMessageSchema,
   workspaceSubmitSchema,
-  workspaceSyncSchema,
 } from "./protocol";
 
 const target = {
@@ -14,19 +14,21 @@ const target = {
 };
 
 describe("runtime message validation", () => {
-  it("separates prompt synchronization from explicit submission", () => {
+  it("uses explicit prepare and workspace submission messages", () => {
     expect(
-      workspaceSyncSchema.safeParse({
-        type: "WORKSPACE_SYNC",
-        revision: 2,
-        prompt: "",
-        targets: [target],
+      preparePromptSchema.safeParse({
+        type: "PREPARE_PROMPT",
+        panelId: "panel-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        prompt: "比较这个问题",
       }).success,
     ).toBe(true);
     expect(
       workspaceSubmitSchema.safeParse({
         type: "WORKSPACE_SUBMIT",
-        taskId: "task-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
         prompt: "比较这个问题",
         targets: [target],
       }).success,
@@ -37,10 +39,14 @@ describe("runtime message validation", () => {
     expect(
       workspaceSubmitSchema.safeParse({
         type: "WORKSPACE_SUBMIT",
-        taskId: "task-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
         prompt: "   ",
         targets: [target],
       }).success,
+    ).toBe(false);
+    expect(
+      runtimeMessageSchema.safeParse({ type: "WORKSPACE_SYNC", prompt: "draft" }).success,
     ).toBe(false);
     expect(runtimeMessageSchema.safeParse({ type: "STEAL_COOKIE" }).success).toBe(false);
   });

@@ -1,16 +1,24 @@
 import { browser } from "wxt/browser";
 import {
   providerCommandSchema,
+  type CommitPromptMessage,
   type ProviderCommand,
   type ProviderRunResult,
 } from "../core/messaging/protocol";
-import { normalizeProviderError } from "../core/providers/errors";
+import type { ResponseBaseline, ResponseCaptureUpdate } from "../core/providers/contracts";
+import { normalizeProviderError, ProviderError } from "../core/providers/errors";
 import { providerRegistry } from "../core/providers/registry";
 import { TaskLedger } from "../core/orchestration/task-ledger";
 import { builtInProviderMatches } from "../core/providers/built-in-sites";
 import { startFrameHeartbeat, watchProviderStatus } from "../runtime/provider-status";
 import { connectProviderPort } from "../runtime/provider-port";
 import { appendProviderDiagnostic, describeProviderElement } from "../runtime/provider-diagnostics";
+
+interface PreparedTurn {
+  sessionId: string;
+  prompt: string;
+  baseline: ResponseBaseline;
+}
 
 export default defineContentScript({
   matches: [...builtInProviderMatches],
@@ -22,7 +30,7 @@ export default defineContentScript({
     let panelId = readPanelId(window.name);
     const strategy = plugin.createStrategy();
     const tasks = new TaskLedger<ProviderRunResult>();
-    let latestRequestedRevision = -1;
+    const preparedTurns = new Map<string, PreparedTurn>();
     let commandQueue = Promise.resolve();
 
     const hello = (await browser.runtime.sendMessage({
@@ -34,15 +42,64 @@ export default defineContentScript({
     panelId = panelId ?? hello?.panelId;
     if (!panelId || !hello?.ok) return;
 
-    void appendProviderDiagnostic(panelId, plugin.definition.id, {
-      stage: "frame-ready",
-    }).catch(() => undefined);
+    void appendProviderDiagnostic(panelId, plugin.definition.id, { stage: "frame-ready" }).catch(
+      () => undefined,
+    );
 
-    const ctx = { document, window, timeoutMs: 15_000 };
+    const ctx = { document, window, timeoutMs: 15_000, responseTimeoutMs: 180_000 };
+
+    const reportResponse = async (
+      command: CommitPromptMessage,
+      update: ResponseCaptureUpdate,
+    ): Promise<void> => {
+      await browser.runtime
+        .sendMessage({
+          type: "PROVIDER_RESPONSE_UPDATE",
+          panelId,
+          providerId: plugin.definition.id,
+          sessionId: command.sessionId,
+          turnId: command.turnId,
+          status: update.status,
+          ...(update.text !== undefined ? { text: update.text } : {}),
+          ...(update.message ? { message: update.message } : {}),
+        })
+        .catch(() => undefined);
+      void appendProviderDiagnostic(panelId, plugin.definition.id, {
+        stage: "response-update",
+        operation: "response",
+      }).catch(() => undefined);
+    };
+
+    const captureResponse = async (
+      command: CommitPromptMessage,
+      baseline: ResponseBaseline,
+    ): Promise<void> => {
+      try {
+        await reportResponse(command, { status: "waiting" });
+        const final = await strategy.captureResponse(ctx, baseline, (update) =>
+          reportResponse(command, update),
+        );
+        await reportResponse(command, final);
+      } catch (error) {
+        const normalized = normalizeProviderError(error);
+        await reportResponse(command, {
+          status: "failed",
+          message: normalized.message,
+        });
+      }
+    };
+
     const handleCommand = async (command: ProviderCommand): Promise<ProviderRunResult> => {
-      const operation = command.type === "SYNC_PROMPT" ? "sync" : "submit";
+      const operation =
+        command.type === "PREPARE_PROMPT"
+          ? "prepare"
+          : command.type === "COMMIT_PROMPT"
+            ? "submit"
+            : "new-session";
       const requestId =
-        command.type === "SYNC_PROMPT" ? `sync:${command.revision}` : command.taskId;
+        command.type === "START_NEW_CONVERSATION" ? command.sessionId : command.turnId;
+      const promptLength =
+        command.type === "START_NEW_CONVERSATION" ? undefined : command.prompt.length;
       const startedAt = performance.now();
       const composerDescription = describeProviderElement(
         document.querySelector("[data-lexical-editor='true'], textarea, [contenteditable='true']"),
@@ -50,25 +107,83 @@ export default defineContentScript({
       void appendProviderDiagnostic(panelId, plugin.definition.id, {
         stage: "command-start",
         operation,
-        promptLength: command.prompt.length,
+        ...(promptLength !== undefined ? { promptLength } : {}),
         ...(composerDescription ? { composer: composerDescription } : {}),
       }).catch(() => undefined);
 
-      if (command.type === "SYNC_PROMPT" && command.revision < latestRequestedRevision) {
-        return {
-          requestId,
-          panelId: command.panelId,
-          providerId: plugin.definition.id,
-          operation,
-          status: "duplicate",
-        };
-      }
+      try {
+        if (command.type === "PREPARE_PROMPT") {
+          const existing = preparedTurns.get(command.turnId);
+          if (existing) {
+            if (existing.sessionId !== command.sessionId || existing.prompt !== command.prompt) {
+              throw new ProviderError("PROMPT_MISMATCH", "同一发送任务的内容发生变化");
+            }
+            return {
+              requestId,
+              panelId: command.panelId,
+              providerId: plugin.definition.id,
+              operation,
+              status: "duplicate",
+            };
+          }
+          const baseline = await strategy.prepareSubmit(ctx);
+          preparedTurns.set(command.turnId, {
+            sessionId: command.sessionId,
+            prompt: command.prompt,
+            baseline,
+          });
+          void appendProviderDiagnostic(panelId, plugin.definition.id, {
+            stage: "prepare-confirmed",
+            operation: "prepare",
+            promptLength: command.prompt.length,
+            durationMs: Math.round(performance.now() - startedAt),
+          }).catch(() => undefined);
+          return {
+            requestId,
+            panelId: command.panelId,
+            providerId: plugin.definition.id,
+            operation,
+            status: "prepared",
+          };
+        }
 
-      if (command.type === "SUBMIT_PROMPT") {
-        const existing = tasks.get(command.taskId);
-        if (existing) {
+        if (command.type === "START_NEW_CONVERSATION") {
+          const taskKey = `new-session:${command.sessionId}`;
+          const existing = tasks.get(taskKey);
+          if (existing) {
+            return (
+              existing.value ?? {
+                requestId,
+                panelId: command.panelId,
+                providerId: plugin.definition.id,
+                operation,
+                status: "duplicate",
+              }
+            );
+          }
+          tasks.start(taskKey);
+          await strategy.startNewConversation(ctx);
+          preparedTurns.clear();
+          const result: ProviderRunResult = {
+            requestId,
+            panelId: command.panelId,
+            providerId: plugin.definition.id,
+            operation,
+            status: "submitted",
+          };
+          tasks.succeed(taskKey, result);
+          void appendProviderDiagnostic(panelId, plugin.definition.id, {
+            stage: "new-session-confirmed",
+            operation,
+            durationMs: Math.round(performance.now() - startedAt),
+          }).catch(() => undefined);
+          return result;
+        }
+
+        const existingTask = tasks.get(command.turnId);
+        if (existingTask) {
           return (
-            existing.value ?? {
+            existingTask.value ?? {
               requestId,
               panelId: command.panelId,
               providerId: plugin.definition.id,
@@ -77,20 +192,15 @@ export default defineContentScript({
             }
           );
         }
-        tasks.start(command.taskId);
-      }
-
-      try {
-        await strategy.waitUntilReady(ctx);
-        if (command.type === "SYNC_PROMPT" && command.revision < latestRequestedRevision) {
-          return {
-            requestId,
-            panelId: command.panelId,
-            providerId: plugin.definition.id,
-            operation,
-            status: "duplicate",
-          };
+        const prepared = preparedTurns.get(command.turnId);
+        if (
+          !prepared ||
+          prepared.sessionId !== command.sessionId ||
+          prepared.prompt !== command.prompt
+        ) {
+          throw new ProviderError("COMPOSER_NOT_READY", "发送任务尚未通过预检，请重新发送");
         }
+        tasks.start(command.turnId);
         await strategy.writePrompt(ctx, { text: command.prompt });
         const submitDescription = describeProviderElement(
           document.querySelector(
@@ -99,25 +209,16 @@ export default defineContentScript({
         );
         void appendProviderDiagnostic(panelId, plugin.definition.id, {
           stage: "write-confirmed",
-          operation,
+          operation: "submit",
           promptLength: command.prompt.length,
           durationMs: Math.round(performance.now() - startedAt),
           ...(submitDescription ? { submit: submitDescription } : {}),
         }).catch(() => undefined);
-        if (command.type === "SYNC_PROMPT") {
-          return {
-            requestId,
-            panelId: command.panelId,
-            providerId: plugin.definition.id,
-            operation,
-            status: "synced",
-          };
-        }
-
         await strategy.submit(ctx);
+        preparedTurns.delete(command.turnId);
         void appendProviderDiagnostic(panelId, plugin.definition.id, {
           stage: "submit-confirmed",
-          operation,
+          operation: "submit",
           promptLength: command.prompt.length,
           durationMs: Math.round(performance.now() - startedAt),
         }).catch(() => undefined);
@@ -128,18 +229,23 @@ export default defineContentScript({
           operation,
           status: "submitted",
         };
-        tasks.succeed(command.taskId, result);
+        tasks.succeed(command.turnId, result);
+        void captureResponse(command, prepared.baseline);
         return result;
       } catch (error) {
         const normalized = normalizeProviderError(error);
         void appendProviderDiagnostic(panelId, plugin.definition.id, {
           stage: "command-failed",
           operation,
-          promptLength: command.prompt.length,
+          ...(promptLength !== undefined ? { promptLength } : {}),
           durationMs: Math.round(performance.now() - startedAt),
           errorCode: normalized.code,
         }).catch(() => undefined);
-        const result: ProviderRunResult = {
+        if (command.type === "COMMIT_PROMPT") tasks.fail(command.turnId, normalized.message);
+        if (command.type === "START_NEW_CONVERSATION") {
+          tasks.fail(`new-session:${command.sessionId}`, normalized.message);
+        }
+        return {
           requestId,
           panelId: command.panelId,
           providerId: plugin.definition.id,
@@ -148,24 +254,10 @@ export default defineContentScript({
           errorCode: normalized.code,
           message: normalized.message,
         };
-        if (command.type === "SUBMIT_PROMPT") tasks.fail(command.taskId, normalized.message);
-        return result;
       }
     };
 
     const enqueueCommand = (command: ProviderCommand): Promise<ProviderRunResult> => {
-      if (command.type === "SYNC_PROMPT") {
-        if (command.revision <= latestRequestedRevision) {
-          return Promise.resolve({
-            requestId: `sync:${command.revision}`,
-            panelId: command.panelId,
-            providerId: plugin.definition.id,
-            operation: "sync",
-            status: "duplicate",
-          });
-        }
-        latestRequestedRevision = command.revision;
-      }
       const run = commandQueue.catch(() => undefined).then(() => handleCommand(command));
       commandQueue = run.then(
         () => undefined,

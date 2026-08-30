@@ -63,22 +63,21 @@ test("opens a full-page workspace with DeepSeek and Kimi by default", async () =
   await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 12_000 });
 });
 
-test("synchronizes text into native website composers without submitting", async () => {
+test("keeps drafts isolated from native website composers until submit", async () => {
   const prompt = "你是什么模型？我是通过统一输入框输入的";
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill(prompt);
+  await workspace.locator(".global-composer textarea").fill(prompt);
+  await workspace.waitForTimeout(1_000);
 
   const frames = workspace.locator("article.provider-panel iframe");
   for (let index = 0; index < 2; index += 1) {
     const frame = frames.nth(index).contentFrame();
-    await expect(frame.locator("body")).toHaveAttribute("data-last-synced", prompt, {
-      timeout: 10_000,
-    });
+    await expect(frame.locator("body")).toHaveAttribute("data-last-synced", "");
     await expect(frame.locator("body")).toHaveAttribute("data-submit-count", "0");
   }
 });
 
-test("keeps the global composer focused during debounced cross-frame synchronization", async () => {
-  const composer = workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页");
+test("keeps the global composer focused while editing an isolated draft", async () => {
+  const composer = workspace.locator(".global-composer textarea");
   await composer.fill("");
   await composer.focus();
 
@@ -90,22 +89,13 @@ test("keeps the global composer focused during debounced cross-frame synchroniza
 
   await expect(composer).toHaveValue("持续输入不失焦");
   await expect(
-    workspace
-      .locator("article.provider-panel[data-provider='deepseek'] iframe")
-      .contentFrame()
-      .locator("body"),
-  ).toHaveAttribute("data-last-synced", "持续输入不失焦");
-  await expect(
-    workspace
-      .locator("article.provider-panel[data-provider='kimi'] iframe")
-      .contentFrame()
-      .locator("body"),
-  ).toHaveAttribute("data-last-synced", "持续输入不失焦");
+    workspace.locator("article.provider-panel iframe").first().contentFrame().locator("body"),
+  ).toHaveAttribute("data-last-synced", "");
 });
 
-test("submits the synchronized prompt exactly once and stores a lightweight history snapshot", async () => {
+test("submits exactly once and stores provider replies in the session timeline", async () => {
   const prompt = "你是什么模型？我是通过统一输入框输入的";
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill(prompt);
+  await workspace.locator(".global-composer textarea").fill(prompt);
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   const frames = workspace.locator("article.provider-panel iframe");
   for (let index = 0; index < 2; index += 1) {
@@ -113,15 +103,37 @@ test("submits the synchronized prompt exactly once and stores a lightweight hist
     await expect(frame.locator("body")).toHaveAttribute("data-submit-count", "1");
     await expect(frame.locator("[data-last-prompt]")).toHaveText(prompt);
   }
-  await expect(workspace.locator(".panel-status.status-submitted")).toHaveCount(2);
   await expect(workspace.locator(".history-item").first()).toContainText("你是什么模型");
 
   await workspace.locator(".history-item").first().click();
-  const detail = workspace.getByRole("dialog", { name: "发送记录详情" });
+  const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail).toContainText(prompt);
-  await expect(detail.locator(".delivery-list > div")).toHaveCount(2);
-  await expect(detail).toContainText("不会恢复当时的网页或原始会话");
+  await expect(detail.locator(".exchange-record")).toHaveCount(2);
+  await expect(detail.locator(".exchange-record").first()).toContainText(
+    `Mock AI 回复：${prompt}`,
+    {
+      timeout: 10_000,
+    },
+  );
   await detail.getByTitle("关闭").click();
+});
+
+test("keeps multiple turns in one session until New Task resets every official page", async () => {
+  await workspace.locator(".global-composer textarea").fill("同一会话的第二个问题");
+  await workspace.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(workspace.locator(".history-item")).toHaveCount(1);
+  await workspace.locator(".history-item").first().click();
+  const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
+  await expect(detail.locator(".turn-record")).toHaveCount(2);
+  await detail.getByTitle("关闭").click();
+
+  await workspace.getByRole("button", { name: "新任务" }).click();
+  await expect(workspace.locator(".history-item")).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    await expect(
+      workspace.locator("article.provider-panel iframe").nth(index).contentFrame().locator("body"),
+    ).toHaveAttribute("data-new-session-count", "1");
+  }
 });
 
 test("manages all seven preconfigured websites and exposes experimental embed status", async () => {
@@ -156,9 +168,9 @@ test("selects send targets independently without closing website panels", async 
   await openTargetSelector(workspace);
   const targets = workspace.getByRole("dialog", { name: "选择发送目标" });
   await targets.locator(".target-option[data-provider='coze'] input").uncheck();
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+  await workspace.locator(".global-composer textarea").click();
 
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill("只发送到六个站点");
+  await workspace.locator(".global-composer textarea").fill("只发送到六个站点");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   const after = await getSubmitCounts(workspace);
   const cozeIndex = await panels.evaluateAll((items) =>
@@ -177,7 +189,7 @@ test("selects send targets independently without closing website panels", async 
     .getByRole("dialog", { name: "选择发送目标" })
     .locator(".target-option[data-provider='coze'] input")
     .check();
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+  await workspace.locator(".global-composer textarea").click();
 });
 
 test("closes and reopens a website from the site manager", async () => {
@@ -211,17 +223,19 @@ test("keeps a native single-site follow-up independent", async () => {
   expect(after.slice(1)).toEqual(before.slice(1));
 });
 
-test("isolates a provider DOM failure from all other websites", async () => {
+test("aborts all sends when one provider fails strict preflight", async () => {
   const panels = workspace.locator("article.provider-panel");
+  const before = await getSubmitCounts(workspace);
   const broken = workspace.locator("article.provider-panel[data-provider='qwen']");
   const brokenFrame = broken.locator("iframe").contentFrame();
   await brokenFrame.locator("button, [role='button']").evaluateAll((elements) => {
     elements.forEach((element) => element.remove());
   });
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill("单站故障隔离测试");
+  await workspace.locator(".global-composer textarea").fill("预检原子性测试");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   await expect(broken.locator(".panel-status.status-error")).toBeVisible({ timeout: 10_000 });
-  await expect(panels.locator(".panel-status.status-submitted")).toHaveCount(6);
+  expect(await getSubmitCounts(workspace)).toEqual(before);
+  await expect(panels.locator(".panel-status.status-ready")).toHaveCount(6);
   await broken.getByTitle("刷新网页").click();
   await expect(broken.locator(".panel-status.status-ready")).toBeVisible({ timeout: 12_000 });
 });
@@ -248,7 +262,7 @@ test("routes a selected panel through an ordinary browser tab fallback", async (
   await expect(providerTab.locator("[data-mock-ready='true']")).toBeVisible();
 
   await selectOnlyTarget(workspace, "deepseek");
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill("普通标签页发送");
+  await workspace.locator(".global-composer textarea").fill("普通标签页发送");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   await expect(providerTab.locator("body")).toHaveAttribute("data-submit-count", "1");
   await providerTab.close();
@@ -258,7 +272,7 @@ test("routes a selected panel through an ordinary browser tab fallback", async (
     .getByRole("dialog", { name: "选择发送目标" })
     .getByRole("button", { name: "全选" })
     .click();
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+  await workspace.locator(".global-composer textarea").click();
 });
 
 test("renders stable rounded workbench layouts without page overflow", async () => {
@@ -288,7 +302,7 @@ test("renders stable rounded workbench layouts without page overflow", async () 
     path: "test-results/workspace-target-selector-1440x900.png",
     fullPage: true,
   });
-  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+  await workspace.locator(".global-composer textarea").click();
 });
 
 test("resizes adjacent tiled panels and restores equal widths", async () => {
@@ -357,7 +371,7 @@ async function selectOnlyTarget(page: Page, providerId: string): Promise<void> {
   const selector = page.getByRole("dialog", { name: "选择发送目标" });
   await selector.getByRole("button", { name: "清空" }).click();
   await selector.locator(`.target-option[data-provider='${providerId}'] input`).check();
-  await page.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+  await page.locator(".global-composer textarea").click();
 }
 
 function mockProviderHtml(host: string): string {
@@ -374,13 +388,14 @@ function mockProviderHtml(host: string): string {
       [data-last-prompt] { margin-top: 14px; padding: 10px; background: #f2f4f7; white-space: pre-wrap; }
     </style>
   </head>
-  <body data-submit-count="0" data-last-synced="">
+  <body data-submit-count="0" data-new-session-count="0" data-last-synced="">
     <header data-mock-ready="true">Mock AI · ${host}</header>
     <main>
+      <button id="new-chat" aria-label="New chat" type="button">New chat</button>
       <textarea id="chat-input" class="ds-scroll-area" placeholder="输入问题"></textarea>
       <div id="prompt-textarea" class="ProseMirror chat-input-editor" contenteditable="true" data-lexical-editor="true" role="textbox"></div>
       <button data-testid="composer-submit-button" class="send-button-container send-button" aria-label="Send" type="submit">Send</button>
-      <div class="markdown" data-last-prompt></div>
+      <div data-last-prompt></div>
     </main>
     <script>
       const readPrompt = () => {
@@ -392,17 +407,28 @@ function mockProviderHtml(host: string): string {
       document.addEventListener('input', (event) => {
         if (event.target.matches('textarea, [contenteditable]')) document.body.dataset.lastSynced = readPrompt();
       });
-      for (const button of document.querySelectorAll('button, [role="button"]')) {
-        button.addEventListener('click', () => {
+      document.querySelector('#new-chat').addEventListener('click', () => {
+        document.body.dataset.newSessionCount = String(Number(document.body.dataset.newSessionCount) + 1);
+        document.querySelector('.assistant-response')?.remove();
+        document.querySelector('[data-last-prompt]').textContent = '';
+        for (const composer of document.querySelectorAll('textarea, [contenteditable]')) {
+          if ('value' in composer) composer.value = '';
+          else composer.replaceChildren();
+        }
+      });
+      document.querySelector('[data-testid="composer-submit-button"]').addEventListener('click', () => {
           const prompt = readPrompt();
           document.body.dataset.submitCount = String(Number(document.body.dataset.submitCount) + 1);
           document.querySelector('[data-last-prompt]').textContent = prompt;
+          const response = document.querySelector('.assistant-response') || document.createElement('div');
+          response.className = 'assistant-response';
+          response.textContent = 'Mock AI 回复：' + prompt;
+          document.querySelector('main').append(response);
           for (const composer of document.querySelectorAll('textarea, [contenteditable]')) {
             if ('value' in composer) composer.value = '';
             else composer.replaceChildren();
           }
-        });
-      }
+      });
     </script>
   </body>
 </html>`;

@@ -12,4 +12,8 @@ export const chatgptSelectors = {
     "form button[type='submit']",
   ],
   login: ["button[data-testid='login-button']", "a[href*='auth/login']"],
+  responses: [".assistant-response", "[data-message-author-role='assistant']"],
+  generating: ["button[data-testid='stop-button']", "button[aria-label*='Stop generating']"],
+  newConversation: ["a[data-testid='create-new-chat-button']", "a[href='/']"],
+  newConversationLabels: ["New chat", "新聊天", "新对话"],
 } as const satisfies ProviderSelectors;
