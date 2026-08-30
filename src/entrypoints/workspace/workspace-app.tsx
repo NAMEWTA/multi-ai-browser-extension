@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import {
   ArrowLeft,
   ArrowRight,
-  Check,
+  ChevronDown,
   Columns3,
   Download,
   ExternalLink,
@@ -31,6 +31,7 @@ import { useWorkspaceStore, type WorkspacePanel } from "./workspace-store";
 
 export function WorkspaceApp() {
   const panels = useWorkspaceStore((state) => state.panels);
+  const selectedTargetIds = useWorkspaceStore((state) => state.selectedTargetIds);
   const sidebarOpen = useWorkspaceStore((state) => state.sidebarOpen);
   const layoutMode = useWorkspaceStore((state) => state.layoutMode);
   const hydrated = useWorkspaceStore((state) => state.hydrated);
@@ -93,8 +94,9 @@ export function WorkspaceApp() {
     return () => browser.runtime.onMessage.removeListener(listener);
   }, [setPanelStatus]);
 
-  const enabledSignature = panels
-    .filter((panel) => panel.enabled)
+  const activeMaximized = panels.some((panel) => panel.id === maximized) ? maximized : undefined;
+  const targetSignature = panels
+    .filter((panel) => selectedTargetIds.includes(panel.id))
     .map((panel) => `${panel.id}:${panel.providerId}:${panel.revision}`)
     .join("|");
 
@@ -129,7 +131,7 @@ export function WorkspaceApp() {
         });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [prompt, composing, enabledSignature, hydrated, runtimeReady, setPanelStatus]);
+  }, [prompt, composing, targetSignature, hydrated, runtimeReady, setPanelStatus]);
 
   const filteredHistory = useMemo(() => {
     const query = historyQuery.trim().toLocaleLowerCase();
@@ -142,9 +144,9 @@ export function WorkspaceApp() {
   }, [history, historyQuery]);
 
   function currentTargets() {
-    return useWorkspaceStore
-      .getState()
-      .panels.filter((panel) => panel.enabled)
+    const state = useWorkspaceStore.getState();
+    return state.panels
+      .filter((panel) => state.selectedTargetIds.includes(panel.id))
       .map((panel) => {
         const definition = providerRegistry.get(panel.providerId).definition;
         return {
@@ -369,18 +371,14 @@ export function WorkspaceApp() {
             </button>
             <button className="add-provider" type="button" onClick={() => setPickerOpen(true)}>
               <Plus size={17} />
-              添加站点
+              管理站点
             </button>
           </div>
         </header>
 
         <section className="composer-band" aria-label="全局输入">
           <div className="global-composer">
-            <div className="composer-targets" aria-label="当前发送目标">
-              {panels.map((panel) => (
-                <ProviderTarget key={panel.id} panel={panel} />
-              ))}
-            </div>
+            <TargetSelector panels={panels} />
             <textarea
               ref={inputRef}
               value={prompt}
@@ -404,7 +402,7 @@ export function WorkspaceApp() {
               type="button"
               title="发送到已选择的网页"
               aria-label="发送"
-              disabled={!prompt.trim() || sending || !panels.some((panel) => panel.enabled)}
+              disabled={!prompt.trim() || sending || selectedTargetIds.length === 0}
               onClick={() => void submitPrompt()}
             >
               {sending ? <RefreshCw className="spin" size={19} /> : <Send size={19} />}
@@ -424,7 +422,7 @@ export function WorkspaceApp() {
               <Grid2X2 size={25} />
               <strong>添加要并排打开的 AI 网页</strong>
               <button type="button" onClick={() => setPickerOpen(true)}>
-                <Plus size={16} /> 添加站点
+                <Plus size={16} /> 管理站点
               </button>
             </div>
           ) : (
@@ -432,8 +430,10 @@ export function WorkspaceApp() {
               key={`${panels.map((panel) => panel.id).join("|")}:${layoutResetKey}`}
               panels={panels}
               layoutMode={layoutMode}
-              maximized={maximized}
-              onMaximize={(panelId) => setMaximized(maximized === panelId ? undefined : panelId)}
+              maximized={activeMaximized}
+              onMaximize={(panelId) =>
+                setMaximized(activeMaximized === panelId ? undefined : panelId)
+              }
             />
           )}
         </main>
@@ -598,22 +598,110 @@ function adaptiveColumnCount(count: number, width: number): number {
   return width >= 1_600 ? 4 : width >= 1_000 ? 3 : 2;
 }
 
-function ProviderTarget({ panel }: { panel: WorkspacePanel }) {
-  const togglePanel = useWorkspaceStore((state) => state.togglePanel);
-  const definition = providerRegistry.get(panel.providerId).definition;
+export function TargetSelector({ panels }: { panels: WorkspacePanel[] }) {
+  const selectedTargetIds = useWorkspaceStore((state) => state.selectedTargetIds);
+  const toggleTarget = useWorkspaceStore((state) => state.toggleTarget);
+  const setAllTargets = useWorkspaceStore((state) => state.setAllTargets);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const hostRef = useRef<HTMLDivElement>(null);
+  const selectedPanels = panels.filter((panel) => selectedTargetIds.includes(panel.id));
+  const visiblePanels = panels.filter((panel) =>
+    providerRegistry
+      .get(panel.providerId)
+      .definition.name.toLocaleLowerCase()
+      .includes(query.trim().toLocaleLowerCase()),
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!hostRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <button
-      type="button"
-      className={`target-chip ${panel.enabled ? "active" : ""}`}
-      title={`${panel.enabled ? "取消" : "选择"} ${definition.name}`}
-      aria-label={`${panel.enabled ? "取消" : "选择"} ${definition.name}`}
-      aria-pressed={panel.enabled}
-      onClick={() => togglePanel(panel.id)}
-    >
-      <ProviderMark definition={definition} />
-      <span>{definition.name}</span>
-      {panel.enabled && <Check size={13} />}
-    </button>
+    <div className="target-selector" ref={hostRef}>
+      <button
+        type="button"
+        className="target-summary"
+        aria-label={`选择发送目标，已选择 ${selectedPanels.length} 个，共 ${panels.length} 个`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="target-stack" aria-hidden="true">
+          {selectedPanels.slice(0, 3).map((panel) => (
+            <ProviderMark
+              key={panel.id}
+              definition={providerRegistry.get(panel.providerId).definition}
+            />
+          ))}
+        </span>
+        <strong>发送至 {selectedPanels.length}</strong>
+        <span>/ {panels.length}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <section className="target-popover" role="dialog" aria-label="选择发送目标">
+          <header>
+            <div>
+              <strong>发送目标</strong>
+              <span>只同步并发送到勾选的网页</span>
+            </div>
+            <div className="target-bulk-actions">
+              <button type="button" onClick={() => setAllTargets(true)}>
+                全选
+              </button>
+              <button type="button" onClick={() => setAllTargets(false)}>
+                清空
+              </button>
+            </div>
+          </header>
+          {panels.length > 7 && (
+            <label className="target-search">
+              <Search size={14} />
+              <input
+                type="search"
+                value={query}
+                placeholder="搜索已打开站点"
+                aria-label="搜索发送目标"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+          )}
+          <div className="target-options">
+            {visiblePanels.map((panel) => {
+              const definition = providerRegistry.get(panel.providerId).definition;
+              return (
+                <label className="target-option" data-provider={panel.providerId} key={panel.id}>
+                  <input
+                    type="checkbox"
+                    checked={selectedTargetIds.includes(panel.id)}
+                    onChange={() => toggleTarget(panel.id)}
+                  />
+                  <ProviderMark definition={definition} />
+                  <span>
+                    <strong>{definition.name}</strong>
+                    <small>{statusLabel(panel.status)}</small>
+                  </span>
+                </label>
+              );
+            })}
+            {visiblePanels.length === 0 && <p>没有匹配的已打开站点</p>}
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -633,7 +721,6 @@ function ProviderPanel({
   onMaximize(): void;
 }) {
   const definition = providerRegistry.get(panel.providerId).definition;
-  const togglePanel = useWorkspaceStore((state) => state.togglePanel);
   const movePanel = useWorkspaceStore((state) => state.movePanel);
   const refreshPanel = useWorkspaceStore((state) => state.refreshPanel);
   const removePanel = useWorkspaceStore((state) => state.removePanel);
@@ -645,16 +732,10 @@ function ProviderPanel({
       data-provider={panel.providerId}
     >
       <header className="panel-toolbar">
-        <label className="panel-identity">
-          <input
-            type="checkbox"
-            checked={panel.enabled}
-            aria-label={`选择 ${definition.name}`}
-            onChange={() => togglePanel(panel.id)}
-          />
+        <div className="panel-identity">
           <ProviderMark definition={definition} />
           <strong>{definition.name}</strong>
-        </label>
+        </div>
         <span className={`panel-status status-${panel.status}`} title={panel.message}>
           <i />
           <span>
@@ -766,8 +847,16 @@ function ProviderViewport({
 
 function ProviderPicker({ onClose }: { onClose(): void }) {
   const panels = useWorkspaceStore((state) => state.panels);
-  const addPanel = useWorkspaceStore((state) => state.addPanel);
-  const providers = providerRegistry.all();
+  const setProviderOpen = useWorkspaceStore((state) => state.setProviderOpen);
+  const [query, setQuery] = useState("");
+  const providers = providerRegistry.all().filter(({ definition }) => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return (
+      !normalized ||
+      definition.name.toLocaleLowerCase().includes(normalized) ||
+      new URL(definition.defaultUrl).hostname.toLocaleLowerCase().includes(normalized)
+    );
+  });
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
@@ -779,8 +868,8 @@ function ProviderPicker({ onClose }: { onClose(): void }) {
       >
         <header>
           <div>
-            <h2 id="provider-picker-title">选择 AI 网页</h2>
-            <p>直接使用浏览器中各官方网站的现有登录状态。</p>
+            <h2 id="provider-picker-title">管理 AI 网页</h2>
+            <p>打开或关闭工作台中的官网面板，新增站点默认参与统一发送。</p>
           </div>
           <button
             className="icon-button"
@@ -792,27 +881,40 @@ function ProviderPicker({ onClose }: { onClose(): void }) {
             <X size={18} />
           </button>
         </header>
+        <label className="provider-search">
+          <Search size={15} />
+          <input
+            type="search"
+            value={query}
+            placeholder="搜索站点或域名"
+            aria-label="搜索站点"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
         <div className="provider-list">
           {providers.map(({ definition }) => {
             const added = panels.some((panel) => panel.providerId === definition.id);
             return (
-              <button
-                className="provider-option"
-                type="button"
-                key={definition.id}
-                disabled={added}
-                onClick={() => addPanel(definition.id)}
-              >
+              <label className="provider-option" data-provider={definition.id} key={definition.id}>
+                <input
+                  type="checkbox"
+                  checked={added}
+                  aria-label={`${added ? "关闭" : "打开"} ${definition.name}`}
+                  onChange={(event) => setProviderOpen(definition.id, event.target.checked)}
+                />
                 <ProviderMark definition={definition} />
                 <span>
                   <strong>{definition.name}</strong>
                   <small>{new URL(definition.defaultUrl).hostname}</small>
                 </span>
                 {definition.embedMode !== "preferred" && <em>实验性</em>}
-                {added ? <Check size={17} /> : <Plus size={17} />}
-              </button>
+                <span className={`provider-toggle ${added ? "active" : ""}`} aria-hidden="true">
+                  <i />
+                </span>
+              </label>
             );
           })}
+          {providers.length === 0 && <p className="provider-empty">没有匹配的站点</p>}
         </div>
         <footer>
           <span>实验性站点无法嵌入时，可切换到普通标签页继续统一发送。</span>

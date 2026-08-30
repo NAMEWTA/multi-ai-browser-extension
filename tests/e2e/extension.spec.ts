@@ -59,6 +59,7 @@ test("opens a full-page workspace with DeepSeek and Kimi by default", async () =
   await expect(workspace.locator("article.provider-panel[data-provider='deepseek']")).toBeVisible();
   await expect(workspace.locator("article.provider-panel[data-provider='kimi']")).toBeVisible();
   await expect(workspace.locator(".global-composer")).toBeVisible();
+  await expect(workspace.locator(".target-summary")).toContainText("发送至 2");
   await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 12_000 });
 });
 
@@ -123,13 +124,13 @@ test("submits the synchronized prompt exactly once and stores a lightweight hist
   await detail.getByTitle("关闭").click();
 });
 
-test("adds all seven preconfigured websites and exposes experimental embed status", async () => {
-  await workspace.getByRole("button", { name: "添加站点" }).click();
-  const picker = workspace.getByRole("dialog", { name: "选择 AI 网页" });
+test("manages all seven preconfigured websites and exposes experimental embed status", async () => {
+  await workspace.getByRole("button", { name: "管理站点" }).click();
+  const picker = workspace.getByRole("dialog", { name: "管理 AI 网页" });
   await expect(picker.locator(".provider-option")).toHaveCount(7);
   await expect(picker.locator(".provider-option", { hasText: "Coze" })).toContainText("实验性");
   for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax"]) {
-    await picker.locator(".provider-option", { hasText: name }).click();
+    await picker.getByRole("checkbox", { name: `打开 ${name}` }).check();
   }
   await picker.getByRole("button", { name: "完成" }).click();
   await expect(workspace.locator("article.provider-panel")).toHaveCount(7);
@@ -143,13 +144,19 @@ test("adds all seven preconfigured websites and exposes experimental embed statu
       { timeout: 15_000 },
     )
     .toBe(7);
+  await expect(workspace.locator(".target-summary")).toContainText("发送至 7");
 });
 
-test("sends only to selected website panels", async () => {
+test("selects send targets independently without closing website panels", async () => {
   const panels = workspace.locator("article.provider-panel");
   const before = await getSubmitCounts(workspace);
-  const coze = workspace.locator("article.provider-panel[data-provider='coze']");
-  await coze.getByRole("checkbox").uncheck();
+  const cozeFrameName = await workspace
+    .locator("article.provider-panel[data-provider='coze'] iframe")
+    .getAttribute("name");
+  await openTargetSelector(workspace);
+  const targets = workspace.getByRole("dialog", { name: "选择发送目标" });
+  await targets.locator(".target-option[data-provider='coze'] input").uncheck();
+  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
 
   await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill("只发送到六个站点");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
@@ -161,7 +168,30 @@ test("sends only to selected website panels", async () => {
   for (let index = 0; index < after.length; index += 1) {
     if (index !== cozeIndex) expect(after[index]).toBe((before[index] ?? 0) + 1);
   }
-  await coze.getByRole("checkbox").check();
+  await expect(workspace.locator("article.provider-panel")).toHaveCount(7);
+  await expect(
+    workspace.locator("article.provider-panel[data-provider='coze'] iframe"),
+  ).toHaveAttribute("name", cozeFrameName!);
+  await openTargetSelector(workspace);
+  await workspace
+    .getByRole("dialog", { name: "选择发送目标" })
+    .locator(".target-option[data-provider='coze'] input")
+    .check();
+  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
+});
+
+test("closes and reopens a website from the site manager", async () => {
+  const minimax = workspace.locator("article.provider-panel[data-provider='minimax']");
+  await minimax.getByTitle("最大化").click();
+  await workspace.getByRole("button", { name: "管理站点" }).click();
+  const manager = workspace.getByRole("dialog", { name: "管理 AI 网页" });
+  await manager.getByRole("checkbox", { name: "关闭 MiniMax" }).uncheck();
+  await expect(workspace.locator("article.provider-panel[data-provider='minimax']")).toHaveCount(0);
+  await expect(workspace.locator("article.provider-panel.panel-hidden")).toHaveCount(0);
+  await manager.getByRole("checkbox", { name: "打开 MiniMax" }).check();
+  await manager.getByRole("button", { name: "完成" }).click();
+  await expect(workspace.locator("article.provider-panel[data-provider='minimax']")).toBeVisible();
+  await expect(workspace.locator(".target-summary")).toContainText("发送至 7");
 });
 
 test("keeps a native single-site follow-up independent", async () => {
@@ -217,19 +247,18 @@ test("routes a selected panel through an ordinary browser tab fallback", async (
   await providerTab.waitForLoadState("domcontentloaded");
   await expect(providerTab.locator("[data-mock-ready='true']")).toBeVisible();
 
-  for (const candidate of await workspace.locator("article.provider-panel").all()) {
-    const checkbox = candidate.getByRole("checkbox");
-    const shouldEnable = (await candidate.getAttribute("data-provider")) === "deepseek";
-    if ((await checkbox.isChecked()) !== shouldEnable) await checkbox.setChecked(shouldEnable);
-  }
+  await selectOnlyTarget(workspace, "deepseek");
   await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").fill("普通标签页发送");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   await expect(providerTab.locator("body")).toHaveAttribute("data-submit-count", "1");
   await providerTab.close();
 
-  for (const checkbox of await workspace.locator(".panel-identity input[type='checkbox']").all()) {
-    if (!(await checkbox.isChecked())) await checkbox.check();
-  }
+  await openTargetSelector(workspace);
+  await workspace
+    .getByRole("dialog", { name: "选择发送目标" })
+    .getByRole("button", { name: "全选" })
+    .click();
+  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
 });
 
 test("renders stable rounded workbench layouts without page overflow", async () => {
@@ -254,6 +283,12 @@ test("renders stable rounded workbench layouts without page overflow", async () 
   expect(gridSize.scrollWidth).toBe(gridSize.clientWidth);
   await workspace.getByTitle("平铺布局").click();
   await workspace.screenshot({ path: "test-results/workspace-v3-1440x900.png", fullPage: true });
+  await openTargetSelector(workspace);
+  await workspace.screenshot({
+    path: "test-results/workspace-target-selector-1440x900.png",
+    fullPage: true,
+  });
+  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
 });
 
 test("resizes adjacent tiled panels and restores equal widths", async () => {
@@ -310,6 +345,19 @@ async function getSubmitCounts(page: Page): Promise<number[]> {
     );
   }
   return counts;
+}
+
+async function openTargetSelector(page: Page): Promise<void> {
+  await page.locator(".target-summary").click();
+  await expect(page.getByRole("dialog", { name: "选择发送目标" })).toBeVisible();
+}
+
+async function selectOnlyTarget(page: Page, providerId: string): Promise<void> {
+  await openTargetSelector(page);
+  const selector = page.getByRole("dialog", { name: "选择发送目标" });
+  await selector.getByRole("button", { name: "清空" }).click();
+  await selector.locator(`.target-option[data-provider='${providerId}'] input`).check();
+  await page.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
 }
 
 function mockProviderHtml(host: string): string {

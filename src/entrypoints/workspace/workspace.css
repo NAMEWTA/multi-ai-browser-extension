@@ -382,47 +382,171 @@ textarea:focus-visible {
   box-shadow: 0 10px 32px rgb(44 64 145 / 12%);
 }
 
-.composer-targets {
-  display: flex;
-  max-width: 330px;
-  gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
+.target-selector {
+  position: relative;
 }
 
-.composer-targets::-webkit-scrollbar {
-  display: none;
-}
-
-.target-chip {
+.target-summary {
   display: flex;
-  height: 30px;
-  flex: 0 0 auto;
+  height: 34px;
+  min-width: 132px;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px 0 5px;
+  gap: 4px;
+  padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  background: #fff;
-  color: #777f8b;
+  border-radius: 10px;
+  background: #f8f9fb;
+  color: var(--text-muted);
   font-size: 10px;
 }
 
-.target-chip.active {
+.target-summary:hover,
+.target-summary[aria-expanded="true"] {
   border-color: #c6d0ff;
   background: var(--accent-soft);
-  color: #314fbf;
+  color: #2948b5;
 }
 
-.target-chip .provider-mark {
+.target-summary strong {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.target-stack {
+  display: flex;
+  min-width: 22px;
+  padding-left: 2px;
+}
+
+.target-stack .provider-mark {
   width: 20px;
   height: 20px;
+  margin-left: -6px;
+  border: 2px solid #fff;
+  border-radius: 7px;
   font-size: 7px;
 }
 
-.composer-targets:has(.target-chip:nth-child(5)) .target-chip > span:not(.provider-mark),
-.composer-targets:has(.target-chip:nth-child(5)) .target-chip > svg {
-  display: none;
+.target-stack .provider-mark:first-child {
+  margin-left: 0;
+}
+
+.target-popover {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 10px);
+  left: 0;
+  display: grid;
+  width: min(340px, calc(100vw - 40px));
+  max-height: min(520px, 65vh);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 55px rgb(20 28 45 / 20%);
+}
+
+.target-popover > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.target-popover > header > div:first-child,
+.target-option > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.target-popover > header strong,
+.target-option strong {
+  font-size: 11px;
+}
+
+.target-popover > header span,
+.target-option small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.target-bulk-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.target-bulk-actions button {
+  min-height: 27px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: #f0f2f5;
+  color: #555e6b;
+  font-size: 9px;
+}
+
+.target-search,
+.provider-search {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 12px 0;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #7b8390;
+}
+
+.target-search input,
+.provider-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 10px;
+}
+
+.target-options {
+  display: grid;
+  grid-row: -2;
+  align-content: start;
+  gap: 3px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.target-option {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 16px 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.target-option:hover {
+  background: #f3f5f8;
+}
+
+.target-option input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.target-options > p {
+  margin: 20px 8px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 10px;
 }
 
 .global-composer textarea {
@@ -580,13 +704,6 @@ textarea:focus-visible {
   gap: 7px;
 }
 
-.panel-identity input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 .panel-identity strong {
   overflow: hidden;
   font-size: 11px;
@@ -723,7 +840,7 @@ textarea:focus-visible {
   display: grid;
   width: min(560px, 100%);
   max-height: min(720px, 90vh);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -755,6 +872,10 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
+.provider-search {
+  margin: 12px 17px 0;
+}
+
 .provider-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -764,6 +885,7 @@ textarea:focus-visible {
 }
 
 .provider-option {
+  position: relative;
   display: grid;
   min-height: 60px;
   grid-template-columns: 32px minmax(0, 1fr) auto auto;
@@ -773,12 +895,25 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   border-radius: 9px;
   background: #fff;
+  cursor: pointer;
   text-align: left;
 }
 
-.provider-option:hover:not(:disabled) {
+.provider-option:hover {
   border-color: #b8c3f8;
   background: #f9faff;
+}
+
+.provider-option > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.provider-option:has(input:focus-visible) {
+  outline: 2px solid #6682ff;
+  outline-offset: 2px;
 }
 
 .provider-option > span:not(.provider-mark) {
@@ -806,6 +941,41 @@ textarea:focus-visible {
   color: #8b5800;
   font-size: 8px;
   font-style: normal;
+}
+
+.provider-toggle {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  border-radius: 9px;
+  background: #d6dae0;
+  transition: background 120ms ease;
+}
+
+.provider-toggle i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(20 28 45 / 20%);
+  transition: transform 120ms ease;
+}
+
+.provider-toggle.active {
+  background: var(--accent);
+}
+
+.provider-toggle.active i {
+  transform: translateX(12px);
+}
+
+.provider-empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  text-align: center;
 }
 
 .provider-picker > footer {
@@ -939,11 +1109,7 @@ textarea:focus-visible {
     grid-template-columns: 210px minmax(0, 1fr);
   }
 
-  .composer-targets {
-    max-width: 250px;
-  }
-
-  .target-chip span:not(.provider-mark) {
-    display: none;
+  .target-summary {
+    min-width: 116px;
   }
 }

@@ -46,9 +46,9 @@ test.afterAll(async () => {
 });
 
 test("loads the seven configured real AI websites without test interception", async () => {
-  await workspace.getByRole("button", { name: "添加站点" }).click();
+  await workspace.getByRole("button", { name: "管理站点" }).click();
   for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax"]) {
-    await workspace.locator(".provider-option", { hasText: name }).click();
+    await workspace.getByRole("checkbox", { name: `打开 ${name}` }).check();
   }
   await workspace.getByRole("button", { name: "完成" }).click();
   const frames = workspace.locator("article.provider-panel iframe");
@@ -97,11 +97,7 @@ test("synchronizes into the real Kimi Lexical editor without sending", async () 
   const prompt = "【官网同步验收】这段文字不会发送";
   const kimiPanel = workspace.locator("article.provider-panel[data-provider='kimi']");
   await expect(kimiPanel.locator(".panel-status.status-ready")).toBeVisible({ timeout: 45_000 });
-  for (const panel of await workspace.locator("article.provider-panel").all()) {
-    const checkbox = panel.getByRole("checkbox");
-    const shouldEnable = (await panel.getAttribute("data-provider")) === "kimi";
-    if ((await checkbox.isChecked()) !== shouldEnable) await checkbox.setChecked(shouldEnable);
-  }
+  await selectOnlyTarget("kimi");
 
   const composer = workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页");
   await composer.fill(prompt);
@@ -127,11 +123,7 @@ test("routes a prompt to a real ready website frame", async () => {
 
   const readyPanel = panels.filter({ has: workspace.locator(".status-ready") }).first();
   const provider = await readyPanel.getAttribute("data-provider");
-  for (const panel of await panels.all()) {
-    const checkbox = panel.getByRole("checkbox");
-    const shouldEnable = (await panel.getAttribute("data-provider")) === provider;
-    if ((await checkbox.isChecked()) !== shouldEnable) await checkbox.setChecked(shouldEnable);
-  }
+  await selectOnlyTarget(provider!);
 
   await workspace
     .getByPlaceholder("输入一次，同步到所有已选择的 AI 网页")
@@ -162,4 +154,12 @@ function isExpectedSite(url: string, expectedHost: string): boolean {
   const finalHost = new URL(url).hostname;
   const baseDomain = expectedHost.split(".").slice(-2).join(".");
   return finalHost === expectedHost || finalHost.endsWith(`.${baseDomain}`);
+}
+
+async function selectOnlyTarget(providerId: string): Promise<void> {
+  await workspace.locator(".target-summary").click();
+  const selector = workspace.getByRole("dialog", { name: "选择发送目标" });
+  await selector.getByRole("button", { name: "清空" }).click();
+  await selector.locator(`.target-option[data-provider='${providerId}'] input`).check();
+  await workspace.getByPlaceholder("输入一次，同步到所有已选择的 AI 网页").click();
 }
