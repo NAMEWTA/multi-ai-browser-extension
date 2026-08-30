@@ -16,8 +16,10 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("multi-ai-workspace-" +
 
 try {
   if ($IncludePrerelease) {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases?per_page=20" -Headers $headers |
-      Where-Object { -not $_.draft } |
+    $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases?per_page=20" -Headers $headers
+    $release = $releases |
+      Where-Object { $_.draft -eq $false } |
+      Sort-Object { [datetime]$_.published_at } -Descending |
       Select-Object -First 1
   } else {
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/latest" -Headers $headers
