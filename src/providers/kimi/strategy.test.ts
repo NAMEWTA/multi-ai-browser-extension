@@ -27,6 +27,28 @@ describe("KimiStrategy", () => {
     expect(composer).toHaveTextContent("统一输入");
   });
 
+  it("prechecks before Kimi enables its send control, then stages without clicking", async () => {
+    const composer = document.querySelector<HTMLElement>(".chat-input-editor")!;
+    const submit = document.querySelector<HTMLElement>(".send-button-container")!;
+    const click = vi.spyOn(submit, "click");
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn((_command: string, _showUi: boolean, text: string) => {
+        composer.replaceChildren(document.createTextNode(text));
+        submit.classList.toggle("disabled", text.length === 0);
+        submit.toggleAttribute("aria-disabled", text.length === 0);
+        return true;
+      }),
+    });
+    const strategy = new KimiStrategy();
+    const ctx = { document, window, timeoutMs: 100 };
+
+    await expect(strategy.prepareSubmit(ctx)).resolves.toEqual({ count: 0, lastText: "" });
+    await strategy.stagePrompt(ctx, { text: "确认后再发送" });
+    expect(composer).toHaveTextContent("确认后再发送");
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("confirms a Kimi submit only after the editor changes", async () => {
     const composer = document.querySelector<HTMLElement>(".chat-input-editor")!;
     const submit = document.querySelector<HTMLElement>(".send-button-container")!;

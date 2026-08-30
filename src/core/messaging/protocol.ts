@@ -27,12 +27,20 @@ const promptCommandFields = {
   prompt: z.string().trim().min(1).max(100_000),
 };
 
-export const preparePromptSchema = z.object({
-  type: z.literal("PREPARE_PROMPT"),
+export const precheckPromptSchema = z.object({
+  type: z.literal("PRECHECK_PROMPT"),
+  ...promptCommandFields,
+});
+export const stagePromptSchema = z.object({
+  type: z.literal("STAGE_PROMPT"),
   ...promptCommandFields,
 });
 export const commitPromptSchema = z.object({
   type: z.literal("COMMIT_PROMPT"),
+  ...promptCommandFields,
+});
+export const rollbackPromptSchema = z.object({
+  type: z.literal("ROLLBACK_PROMPT"),
   ...promptCommandFields,
 });
 export const startNewConversationSchema = z.object({
@@ -42,8 +50,10 @@ export const startNewConversationSchema = z.object({
 });
 
 export const providerCommandSchema = z.discriminatedUnion("type", [
-  preparePromptSchema,
+  precheckPromptSchema,
+  stagePromptSchema,
   commitPromptSchema,
+  rollbackPromptSchema,
   startNewConversationSchema,
 ]);
 
@@ -92,6 +102,17 @@ export const workspaceResponseUpdateSchema = providerResponseUpdateSchema.extend
   type: z.literal("WORKSPACE_RESPONSE_UPDATE"),
 });
 
+export const providerUrlUpdateSchema = z.object({
+  type: z.literal("PROVIDER_URL_UPDATE"),
+  panelId: z.string().min(1),
+  providerId: providerIdSchema,
+  url: z.url(),
+});
+
+export const workspacePanelUrlUpdateSchema = providerUrlUpdateSchema.extend({
+  type: z.literal("WORKSPACE_PANEL_URL_UPDATE"),
+});
+
 export const openWorkspaceSchema = z.object({ type: z.literal("OPEN_WORKSPACE") });
 export const workspaceReadySchema = z.object({ type: z.literal("WORKSPACE_READY") });
 export const openPanelTabSchema = z.object({
@@ -113,14 +134,17 @@ export const providerDiagnosticSchema = z
     stage: z.enum([
       "frame-ready",
       "command-start",
-      "prepare-confirmed",
-      "write-confirmed",
-      "submit-confirmed",
+      "precheck-confirmed",
+      "stage-confirmed",
+      "commit-confirmed",
+      "rollback-confirmed",
       "response-update",
       "new-session-confirmed",
       "command-failed",
     ]),
-    operation: z.enum(["prepare", "submit", "new-session", "response"]).optional(),
+    operation: z
+      .enum(["precheck", "stage", "commit", "rollback", "new-session", "response"])
+      .optional(),
     promptLength: z.number().int().min(0).max(100_000).optional(),
     durationMs: z.number().int().min(0).max(180_000).optional(),
     composer: z.string().max(300).optional(),
@@ -132,13 +156,17 @@ export const providerDiagnosticSchema = z
 export const runtimeMessageSchema = z.discriminatedUnion("type", [
   frameHelloSchema,
   frameStatusSchema,
-  preparePromptSchema,
+  precheckPromptSchema,
+  stagePromptSchema,
   commitPromptSchema,
+  rollbackPromptSchema,
   startNewConversationSchema,
   workspaceSubmitSchema,
   workspaceNewSessionSchema,
   providerResponseUpdateSchema,
   workspaceResponseUpdateSchema,
+  providerUrlUpdateSchema,
+  workspacePanelUrlUpdateSchema,
   openWorkspaceSchema,
   workspaceReadySchema,
   openPanelTabSchema,
@@ -150,15 +178,26 @@ export const providerRunResultSchema = z.object({
   requestId: z.string().min(1),
   panelId: z.string().min(1),
   providerId: providerIdSchema.optional(),
-  operation: z.enum(["prepare", "submit", "new-session"]),
-  status: z.enum(["prepared", "submitted", "duplicate", "failed", "unavailable", "aborted"]),
+  operation: z.enum(["precheck", "stage", "commit", "rollback", "new-session"]),
+  status: z.enum([
+    "prechecked",
+    "staged",
+    "submitted",
+    "rolled-back",
+    "duplicate",
+    "failed",
+    "unavailable",
+    "aborted",
+  ]),
   errorCode: z.enum(providerErrorCodes).optional(),
   message: z.string().optional(),
 });
 
 export type ProviderCommand = z.infer<typeof providerCommandSchema>;
-export type PreparePromptMessage = z.infer<typeof preparePromptSchema>;
+export type PrecheckPromptMessage = z.infer<typeof precheckPromptSchema>;
+export type StagePromptMessage = z.infer<typeof stagePromptSchema>;
 export type CommitPromptMessage = z.infer<typeof commitPromptSchema>;
+export type RollbackPromptMessage = z.infer<typeof rollbackPromptSchema>;
 export type StartNewConversationMessage = z.infer<typeof startNewConversationSchema>;
 export type WorkspaceSubmitMessage = z.infer<typeof workspaceSubmitSchema>;
 export type WorkspaceNewSessionMessage = z.infer<typeof workspaceNewSessionSchema>;

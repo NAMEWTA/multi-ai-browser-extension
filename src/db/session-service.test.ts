@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "./database";
 import {
+  activateSession,
   applyResponseUpdate,
   applySubmitResults,
   createSession,
   createTurn,
+  discardTurn,
   ensureActiveSession,
+  getActiveSession,
   getSessionDetail,
+  getSessionWorkspaceSnapshot,
   listSessions,
   migrateLegacyHistory,
+  migrateSessionWorkspaceSnapshots,
+  recordSuccessfulTurn,
+  updateSessionWorkspaceSnapshot,
 } from "./session-service";
 
 const targets = [
@@ -56,6 +63,125 @@ describe("session history", () => {
     const second = await createSession("第二项任务");
     expect((await db.sessions.get(first.id))?.status).toBe("archived");
     expect((await db.sessions.get(second.id))?.status).toBe("active");
+  });
+
+  it("persists complete provider URLs and switches the active session", async () => {
+    const first = await createSession("第一项任务");
+    const deepSeekUrl = "https://chat.deepseek.com/a/chat/s/full-session-id?source=workspace";
+    await updateSessionWorkspaceSnapshot(first.id, {
+      layoutMode: "tiles",
+      panels: [
+        {
+          panelId: "panel-ds",
+          providerId: "deepseek",
+          url: deepSeekUrl,
+          order: 0,
+          selected: true,
+          widthRatio: 1.7,
+        },
+      ],
+    });
+    const second = await createSession("第二项任务");
+    await activateSession(first.id);
+
+    expect((await getActiveSession())?.id).toBe(first.id);
+    expect((await db.sessions.get(second.id))?.status).toBe("archived");
+    expect((await getSessionWorkspaceSnapshot(first.id))?.panels[0]).toMatchObject({
+      url: deepSeekUrl,
+      widthRatio: 1.7,
+    });
+  });
+
+  it("rejects a workspace URL assigned to the wrong provider", async () => {
+    const session = await createSession("错误 URL");
+    await expect(
+      updateSessionWorkspaceSnapshot(session.id, {
+        layoutMode: "tiles",
+        panels: [
+          {
+            panelId: "panel-k",
+            providerId: "kimi",
+            url: "https://chat.deepseek.com/a/chat/s/not-kimi",
+            order: 0,
+            selected: true,
+            widthRatio: 1,
+          },
+        ],
+      }),
+    ).rejects.toThrow("不属于 kimi");
+  });
+
+  it("migrates an Alpha 5 session to a default provider workspace", async () => {
+    const timestamp = "2026-08-30T10:00:00.000Z";
+    await db.sessions.add({
+      id: "alpha-5-session",
+      title: "旧会话",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      status: "archived",
+    });
+    await db.exchanges.add({
+      id: "exchange-old",
+      sessionId: "alpha-5-session",
+      turnId: "turn-old",
+      panelId: "panel-k",
+      providerId: "kimi",
+      providerName: "Kimi",
+      targetIndex: 0,
+      submitStatus: "submitted",
+      responseStatus: "unsupported",
+    });
+    await migrateSessionWorkspaceSnapshots();
+    expect((await db.sessions.get("alpha-5-session"))?.workspace?.panels[0]).toMatchObject({
+      panelId: "panel-k",
+      providerId: "kimi",
+      url: "https://www.kimi.com/",
+      selected: true,
+      widthRatio: 1,
+    });
+  });
+
+  it("records a successful turn and buffered reply atomically", async () => {
+    const session = await createSession("延迟落库");
+    const turn = await recordSuccessfulTurn(
+      session.id,
+      "发送成功后再记录",
+      targets,
+      [
+        { panelId: "panel-ds", status: "submitted" },
+        { panelId: "panel-k", status: "failed", message: "点击失败" },
+      ],
+      [
+        {
+          panelId: "panel-ds",
+          status: "completed",
+          responseText: "提前到达的回复",
+        },
+      ],
+      "successful-turn",
+    );
+    const detail = await getSessionDetail(session.id);
+    expect(turn.status).toBe("completed");
+    expect(detail?.turns[0]?.exchanges).toMatchObject([
+      { submitStatus: "submitted", responseText: "提前到达的回复" },
+      { submitStatus: "failed", responseStatus: "failed" },
+    ]);
+  });
+
+  it("does not record a turn when no target submitted and can discard a pending turn", async () => {
+    const session = await createSession("失败不记录");
+    await expect(
+      recordSuccessfulTurn(session.id, "全部失败", targets, [
+        { panelId: "panel-ds", status: "failed" },
+        { panelId: "panel-k", status: "aborted" },
+      ]),
+    ).rejects.toThrow("不能记录轮次");
+    expect(await db.turns.count()).toBe(0);
+
+    const pending = await createTurn(session.id, "临时轮次", targets);
+    await discardTurn(pending.id);
+    expect(await db.turns.get(pending.id)).toBeUndefined();
+    expect(await db.exchanges.where("turnId").equals(pending.id).count()).toBe(0);
   });
 
   it("records an aborted preflight without pretending any provider submitted", async () => {

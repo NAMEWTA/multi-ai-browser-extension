@@ -38,6 +38,13 @@ export class DeepSeekStrategy extends BaseDomStrategy {
     }
     await super.submit(ctx);
   }
+
+  protected override validateStagedSubmitControl(control: HTMLElement): void {
+    if (this.busyControlSignature && controlSignature(control) === this.busyControlSignature) {
+      throw new ProviderError("PROVIDER_BUSY", "DeepSeek 当前回答仍在生成，请稍后再发送");
+    }
+    this.busyControlSignature = undefined;
+  }
 }
 
 function controlSignature(element: HTMLElement | undefined): string | undefined {

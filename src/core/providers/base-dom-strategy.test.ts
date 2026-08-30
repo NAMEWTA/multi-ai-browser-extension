@@ -102,6 +102,38 @@ describe("BaseDomStrategy", () => {
     expect(document.querySelector<HTMLTextAreaElement>("#composer")?.value).toBe("draft");
   });
 
+  it("preflights an empty composer before the website renders its send button", async () => {
+    document.body.innerHTML = '<textarea id="composer"></textarea>';
+    const strategy = new TestStrategy();
+    await expect(strategy.prepareSubmit({ document, window, timeoutMs: 10 })).resolves.toEqual({
+      count: 0,
+      lastText: "",
+    });
+    expect(document.querySelector<HTMLTextAreaElement>("#composer")?.value).toBe("");
+  });
+
+  it("stages content, waits for the enabled control, and can roll it back without clicking", async () => {
+    document.body.innerHTML = `
+      <textarea id="composer"></textarea>
+      <button id="send" disabled>send</button>
+    `;
+    const composer = document.querySelector<HTMLTextAreaElement>("#composer")!;
+    const send = document.querySelector<HTMLButtonElement>("#send")!;
+    const click = vi.spyOn(send, "click");
+    composer.addEventListener("input", () => {
+      send.disabled = composer.value.length === 0;
+    });
+    const strategy = new TestStrategy();
+    await strategy.prepareSubmit({ document, window, timeoutMs: 100 });
+    await strategy.stagePrompt({ document, window, timeoutMs: 100 }, { text: "atomic" });
+    expect(composer.value).toBe("atomic");
+    expect(click).not.toHaveBeenCalled();
+
+    await strategy.rollbackPrompt({ document, window, timeoutMs: 100 }, { text: "atomic" });
+    expect(composer.value).toBe("");
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("captures a new stable assistant response as plain text", async () => {
     vi.useFakeTimers();
     try {

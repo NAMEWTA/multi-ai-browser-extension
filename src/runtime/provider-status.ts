@@ -93,3 +93,33 @@ export function startFrameHeartbeat(options: FrameHeartbeatOptions): void {
   const interval = window.setInterval(() => void send(), options.intervalMs ?? 5_000);
   window.addEventListener("pagehide", () => window.clearInterval(interval), { once: true });
 }
+
+export function watchProviderUrl(panelId: string, providerId: ProviderId, ctx: FrameContext): void {
+  let lastUrl = "";
+  let stopped = false;
+
+  const report = () => {
+    if (stopped) return;
+    const url = ctx.window.location.href;
+    if (url === lastUrl) return;
+    lastUrl = url;
+    void browser.runtime
+      .sendMessage({ type: "PROVIDER_URL_UPDATE", panelId, providerId, url })
+      .catch(() => undefined);
+  };
+
+  report();
+  ctx.window.addEventListener("popstate", report);
+  ctx.window.addEventListener("hashchange", report);
+  const interval = ctx.window.setInterval(report, 500);
+  ctx.window.addEventListener(
+    "pagehide",
+    () => {
+      stopped = true;
+      ctx.window.clearInterval(interval);
+      ctx.window.removeEventListener("popstate", report);
+      ctx.window.removeEventListener("hashchange", report);
+    },
+    { once: true },
+  );
+}

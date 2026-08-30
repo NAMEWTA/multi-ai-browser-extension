@@ -10,7 +10,11 @@ import { normalizeProviderError, ProviderError } from "../core/providers/errors"
 import { providerRegistry } from "../core/providers/registry";
 import { TaskLedger } from "../core/orchestration/task-ledger";
 import { builtInProviderMatches } from "../core/providers/built-in-sites";
-import { startFrameHeartbeat, watchProviderStatus } from "../runtime/provider-status";
+import {
+  startFrameHeartbeat,
+  watchProviderStatus,
+  watchProviderUrl,
+} from "../runtime/provider-status";
 import { connectProviderPort } from "../runtime/provider-port";
 import { appendProviderDiagnostic, describeProviderElement } from "../runtime/provider-diagnostics";
 
@@ -18,6 +22,7 @@ interface PreparedTurn {
   sessionId: string;
   prompt: string;
   baseline: ResponseBaseline;
+  phase: "prechecked" | "staged";
 }
 
 export default defineContentScript({
@@ -90,12 +95,7 @@ export default defineContentScript({
     };
 
     const handleCommand = async (command: ProviderCommand): Promise<ProviderRunResult> => {
-      const operation =
-        command.type === "PREPARE_PROMPT"
-          ? "prepare"
-          : command.type === "COMMIT_PROMPT"
-            ? "submit"
-            : "new-session";
+      const operation = commandOperation(command);
       const requestId =
         command.type === "START_NEW_CONVERSATION" ? command.sessionId : command.turnId;
       const promptLength =
@@ -112,7 +112,7 @@ export default defineContentScript({
       }).catch(() => undefined);
 
       try {
-        if (command.type === "PREPARE_PROMPT") {
+        if (command.type === "PRECHECK_PROMPT") {
           const existing = preparedTurns.get(command.turnId);
           if (existing) {
             if (existing.sessionId !== command.sessionId || existing.prompt !== command.prompt) {
@@ -131,10 +131,11 @@ export default defineContentScript({
             sessionId: command.sessionId,
             prompt: command.prompt,
             baseline,
+            phase: "prechecked",
           });
           void appendProviderDiagnostic(panelId, plugin.definition.id, {
-            stage: "prepare-confirmed",
-            operation: "prepare",
+            stage: "precheck-confirmed",
+            operation: "precheck",
             promptLength: command.prompt.length,
             durationMs: Math.round(performance.now() - startedAt),
           }).catch(() => undefined);
@@ -143,7 +144,90 @@ export default defineContentScript({
             panelId: command.panelId,
             providerId: plugin.definition.id,
             operation,
-            status: "prepared",
+            status: "prechecked",
+          };
+        }
+
+        if (command.type === "STAGE_PROMPT") {
+          const prepared = preparedTurns.get(command.turnId);
+          if (
+            !prepared ||
+            prepared.sessionId !== command.sessionId ||
+            prepared.prompt !== command.prompt
+          ) {
+            throw new ProviderError("COMPOSER_NOT_READY", "发送任务尚未通过只读预检，请重新发送");
+          }
+          if (prepared.phase === "staged") {
+            return {
+              requestId,
+              panelId: command.panelId,
+              providerId: plugin.definition.id,
+              operation,
+              status: "duplicate",
+            };
+          }
+          try {
+            await strategy.stagePrompt(ctx, { text: command.prompt });
+          } catch (error) {
+            await strategy.rollbackPrompt(ctx, { text: command.prompt }).catch(() => undefined);
+            preparedTurns.delete(command.turnId);
+            throw error;
+          }
+          prepared.phase = "staged";
+          const submitDescription = describeProviderElement(
+            document.querySelector(
+              "div[role='button'].ds-button--primary.ds-button--circle:not(.ds-button--disabled), .send-button-container:not(.disabled), button[type='submit']:not(:disabled), button[aria-label*='Send']:not(:disabled), button[aria-label*='发送']:not(:disabled)",
+            ),
+          );
+          void appendProviderDiagnostic(panelId, plugin.definition.id, {
+            stage: "stage-confirmed",
+            operation: "stage",
+            promptLength: command.prompt.length,
+            durationMs: Math.round(performance.now() - startedAt),
+            ...(submitDescription ? { submit: submitDescription } : {}),
+          }).catch(() => undefined);
+          return {
+            requestId,
+            panelId: command.panelId,
+            providerId: plugin.definition.id,
+            operation,
+            status: "staged",
+          };
+        }
+
+        if (command.type === "ROLLBACK_PROMPT") {
+          const prepared = preparedTurns.get(command.turnId);
+          if (!prepared) {
+            return {
+              requestId,
+              panelId: command.panelId,
+              providerId: plugin.definition.id,
+              operation,
+              status: "duplicate",
+            };
+          }
+          if (prepared.sessionId !== command.sessionId || prepared.prompt !== command.prompt) {
+            throw new ProviderError("PROMPT_MISMATCH", "回滚任务与已暂存内容不一致");
+          }
+          try {
+            if (prepared.phase === "staged") {
+              await strategy.rollbackPrompt(ctx, { text: command.prompt });
+            }
+          } finally {
+            preparedTurns.delete(command.turnId);
+          }
+          void appendProviderDiagnostic(panelId, plugin.definition.id, {
+            stage: "rollback-confirmed",
+            operation: "rollback",
+            promptLength: command.prompt.length,
+            durationMs: Math.round(performance.now() - startedAt),
+          }).catch(() => undefined);
+          return {
+            requestId,
+            panelId: command.panelId,
+            providerId: plugin.definition.id,
+            operation,
+            status: "rolled-back",
           };
         }
 
@@ -196,29 +280,25 @@ export default defineContentScript({
         if (
           !prepared ||
           prepared.sessionId !== command.sessionId ||
-          prepared.prompt !== command.prompt
+          prepared.prompt !== command.prompt ||
+          prepared.phase !== "staged"
         ) {
-          throw new ProviderError("COMPOSER_NOT_READY", "发送任务尚未通过预检，请重新发送");
+          throw new ProviderError("COMPOSER_NOT_READY", "发送任务尚未完成全站暂存，请重新发送");
         }
         tasks.start(command.turnId);
-        await strategy.writePrompt(ctx, { text: command.prompt });
-        const submitDescription = describeProviderElement(
-          document.querySelector(
-            "div[role='button'].ds-button--primary.ds-button--circle:not(.ds-button--disabled), .send-button-container:not(.disabled), button[type='submit']:not(:disabled), button[aria-label*='Send']:not(:disabled), button[aria-label*='发送']:not(:disabled)",
-          ),
-        );
-        void appendProviderDiagnostic(panelId, plugin.definition.id, {
-          stage: "write-confirmed",
-          operation: "submit",
-          promptLength: command.prompt.length,
-          durationMs: Math.round(performance.now() - startedAt),
-          ...(submitDescription ? { submit: submitDescription } : {}),
-        }).catch(() => undefined);
         await strategy.submit(ctx);
+        await browser.runtime
+          .sendMessage({
+            type: "PROVIDER_URL_UPDATE",
+            panelId: command.panelId,
+            providerId: plugin.definition.id,
+            url: ctx.window.location.href,
+          })
+          .catch(() => undefined);
         preparedTurns.delete(command.turnId);
         void appendProviderDiagnostic(panelId, plugin.definition.id, {
-          stage: "submit-confirmed",
-          operation: "submit",
+          stage: "commit-confirmed",
+          operation: "commit",
           promptLength: command.prompt.length,
           durationMs: Math.round(performance.now() - startedAt),
         }).catch(() => undefined);
@@ -241,7 +321,10 @@ export default defineContentScript({
           durationMs: Math.round(performance.now() - startedAt),
           errorCode: normalized.code,
         }).catch(() => undefined);
-        if (command.type === "COMMIT_PROMPT") tasks.fail(command.turnId, normalized.message);
+        if (command.type === "COMMIT_PROMPT") {
+          preparedTurns.delete(command.turnId);
+          tasks.fail(command.turnId, normalized.message);
+        }
         if (command.type === "START_NEW_CONVERSATION") {
           tasks.fail(`new-session:${command.sessionId}`, normalized.message);
         }
@@ -268,6 +351,7 @@ export default defineContentScript({
 
     connectProviderPort(panelId, plugin.definition.id, enqueueCommand);
     watchProviderStatus(strategy, ctx, panelId, plugin.definition.id);
+    watchProviderUrl(panelId, plugin.definition.id, ctx);
     startFrameHeartbeat({ panelId, providerId: plugin.definition.id, strategy, ctx });
 
     browser.runtime.onMessage.addListener(async (raw) => {
@@ -282,4 +366,16 @@ function readPanelId(name: string): string | undefined {
   if (!name.startsWith("maw:")) return undefined;
   const panelId = name.slice(4).trim();
   return panelId || undefined;
+}
+
+function commandOperation(command: ProviderCommand): ProviderRunResult["operation"] {
+  return command.type === "PRECHECK_PROMPT"
+    ? "precheck"
+    : command.type === "STAGE_PROMPT"
+      ? "stage"
+      : command.type === "COMMIT_PROMPT"
+        ? "commit"
+        : command.type === "ROLLBACK_PROMPT"
+          ? "rollback"
+          : "new-session";
 }

@@ -18,11 +18,27 @@ export interface SendRecord {
 }
 
 export type SessionStatus = "active" | "archived" | "imported";
+export type SessionLayoutMode = "tiles" | "adaptive";
 export type TurnStatus = "preparing" | "aborted" | "waiting" | "completed" | "partial" | "failed";
 export type ExchangeSubmitStatus =
   "pending" | "prepared" | "submitted" | "aborted" | "failed" | "unavailable";
 export type ExchangeResponseStatus =
   "waiting" | "streaming" | "completed" | "partial" | "timeout" | "failed" | "unsupported";
+
+export interface SessionWorkspacePanel {
+  panelId: string;
+  providerId: ProviderId;
+  url: string;
+  order: number;
+  selected: boolean;
+  widthRatio: number;
+}
+
+export interface SessionWorkspaceSnapshot {
+  layoutMode: SessionLayoutMode;
+  panels: SessionWorkspacePanel[];
+  updatedAt: string;
+}
 
 export interface SessionRecord {
   id: string;
@@ -30,6 +46,8 @@ export interface SessionRecord {
   createdAt: string;
   updatedAt: string;
   status: SessionStatus;
+  /** Optional only for records created before session workspace persistence. */
+  workspace?: SessionWorkspaceSnapshot;
 }
 
 export interface TurnRecord {
@@ -75,6 +93,13 @@ export class AppDatabase extends Dexie {
       sendRecords: "id, &taskId, createdAt",
     });
     this.version(2).stores({
+      sendRecords: "id, &taskId, createdAt",
+      sessions: "id, status, updatedAt, createdAt",
+      turns: "id, sessionId, [sessionId+sequence], createdAt",
+      exchanges: "id, sessionId, turnId, [turnId+providerId], providerId",
+      metadata: "key",
+    });
+    this.version(3).stores({
       sendRecords: "id, &taskId, createdAt",
       sessions: "id, status, updatedAt, createdAt",
       turns: "id, sessionId, [sessionId+sequence], createdAt",

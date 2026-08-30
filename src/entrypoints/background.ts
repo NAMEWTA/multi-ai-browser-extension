@@ -8,6 +8,7 @@ import {
   providerDiagnosticSchema,
   providerIdSchema,
   providerResponseUpdateSchema,
+  providerUrlUpdateSchema,
   providerRunResultSchema,
   runtimeMessageSchema,
   workspaceReadySchema,
@@ -16,6 +17,7 @@ import {
   type ProviderCommand,
   type ProviderRunResult,
 } from "../core/messaging/protocol";
+import { providerRegistry } from "../core/providers/registry";
 import { enableIframeRules } from "../core/permissions/frame-policy-manager";
 import { runtimeSnapshotSchema } from "../core/messaging/runtime-snapshot";
 
@@ -177,11 +179,15 @@ export default defineBackground(() => {
           pendingRuns.delete(key);
           reject(new Error("网页面板响应超时"));
         },
-        command.type === "PREPARE_PROMPT"
-          ? 10_000
-          : command.type === "START_NEW_CONVERSATION"
-            ? 15_000
-            : 20_000,
+        command.type === "PRECHECK_PROMPT"
+          ? 20_000
+          : command.type === "STAGE_PROMPT"
+            ? 30_000
+            : command.type === "ROLLBACK_PROMPT"
+              ? 20_000
+              : command.type === "START_NEW_CONVERSATION"
+                ? 20_000
+                : 20_000,
       );
       pendingRuns.set(key, { panelId: command.panelId, resolve, reject, timeout });
       try {
@@ -334,24 +340,93 @@ export default defineBackground(() => {
       return { ok: true };
     }
 
+    if (providerUrlUpdateSchema.safeParse(parsed.data).success) {
+      const message = providerUrlUpdateSchema.parse(parsed.data);
+      const frame = frames.get(message.panelId);
+      if (
+        !frame ||
+        sender.tab?.id !== frame.tabId ||
+        sender.frameId !== frame.frameId ||
+        message.providerId !== frame.providerId ||
+        !isAllowedProviderUrl(message.providerId, message.url)
+      ) {
+        return { ok: false };
+      }
+      frames.register({ ...frame, url: message.url, lastSeenAt: Date.now() });
+      await persistRuntimeSnapshot();
+      await browser.runtime
+        .sendMessage({ ...message, type: "WORKSPACE_PANEL_URL_UPDATE" })
+        .catch(() => undefined);
+      return { ok: true };
+    }
+
     if (workspaceSubmitSchema.safeParse(parsed.data).success) {
       const command = workspaceSubmitSchema.parse(parsed.data);
-      const prepared = await dispatchMany(sender.tab?.id, command.targets, (target) => ({
-        type: "PREPARE_PROMPT",
+      const prechecked = await dispatchMany(sender.tab?.id, command.targets, (target) => ({
+        type: "PRECHECK_PROMPT",
         panelId: target.panelId,
         sessionId: command.sessionId,
         turnId: command.turnId,
         prompt: command.prompt,
       }));
       if (
-        prepared.some((result) => result.status !== "prepared" && result.status !== "duplicate")
+        prechecked.some((result) => result.status !== "prechecked" && result.status !== "duplicate")
       ) {
-        return prepared.map((result) =>
-          result.status === "prepared" || result.status === "duplicate"
+        const precheckedPanelIds = new Set(
+          prechecked
+            .filter((result) => result.status === "prechecked" || result.status === "duplicate")
+            .map((result) => result.panelId),
+        );
+        const cleanupTargets = command.targets.filter((target) =>
+          precheckedPanelIds.has(target.panelId),
+        );
+        await dispatchMany(sender.tab?.id, cleanupTargets, (target) => ({
+          type: "ROLLBACK_PROMPT",
+          panelId: target.panelId,
+          sessionId: command.sessionId,
+          turnId: command.turnId,
+          prompt: command.prompt,
+        }));
+        return prechecked.map((result) =>
+          result.status === "prechecked" || result.status === "duplicate"
             ? {
                 ...result,
                 status: "aborted" as const,
-                message: "其他网页预检失败，本次未点击任何发送按钮",
+                message: "其他网页只读预检失败，本次未写入或点击任何发送按钮",
+              }
+            : result,
+        );
+      }
+
+      const staged = await dispatchMany(sender.tab?.id, command.targets, (target) => ({
+        type: "STAGE_PROMPT",
+        panelId: target.panelId,
+        sessionId: command.sessionId,
+        turnId: command.turnId,
+        prompt: command.prompt,
+      }));
+      if (staged.some((result) => result.status !== "staged" && result.status !== "duplicate")) {
+        const stagedPanelIds = new Set(
+          staged
+            .filter((result) => result.status === "staged" || result.status === "duplicate")
+            .map((result) => result.panelId),
+        );
+        const rollbackTargets = command.targets.filter((target) =>
+          stagedPanelIds.has(target.panelId),
+        );
+        await dispatchMany(sender.tab?.id, rollbackTargets, (target) => ({
+          type: "ROLLBACK_PROMPT",
+          panelId: target.panelId,
+          sessionId: command.sessionId,
+          turnId: command.turnId,
+          prompt: command.prompt,
+        }));
+        return staged.map((result) =>
+          result.status === "staged" || result.status === "duplicate"
+            ? {
+                ...result,
+                status: "aborted" as const,
+                message: "其他网页暂存失败，已撤销输入，本次未点击任何发送按钮",
               }
             : result,
         );
@@ -443,11 +518,27 @@ function requestId(command: ProviderCommand): string {
 }
 
 function commandOperation(command: ProviderCommand): ProviderRunResult["operation"] {
-  return command.type === "PREPARE_PROMPT"
-    ? "prepare"
-    : command.type === "COMMIT_PROMPT"
-      ? "submit"
-      : "new-session";
+  return command.type === "PRECHECK_PROMPT"
+    ? "precheck"
+    : command.type === "STAGE_PROMPT"
+      ? "stage"
+      : command.type === "COMMIT_PROMPT"
+        ? "commit"
+        : command.type === "ROLLBACK_PROMPT"
+          ? "rollback"
+          : "new-session";
+}
+
+function isAllowedProviderUrl(providerId: string, url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      providerRegistry.match(parsed.href)?.definition.id === providerId
+    );
+  } catch {
+    return false;
+  }
 }
 
 function unavailableResult(
@@ -458,7 +549,7 @@ function unavailableResult(
   return {
     requestId: command ? requestId(command) : crypto.randomUUID(),
     panelId,
-    operation: command ? commandOperation(command) : "submit",
+    operation: command ? commandOperation(command) : "commit",
     status: "unavailable",
     message,
   };

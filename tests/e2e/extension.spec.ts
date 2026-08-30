@@ -105,7 +105,7 @@ test("submits exactly once and stores provider replies in the session timeline",
   }
   await expect(workspace.locator(".history-item").first()).toContainText("你是什么模型");
 
-  await workspace.locator(".history-item").first().click();
+  await workspace.getByLabel("查看对话记录").first().click();
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail).toContainText(prompt);
   await expect(detail.locator(".exchange-record")).toHaveCount(2);
@@ -118,22 +118,37 @@ test("submits exactly once and stores provider replies in the session timeline",
   await detail.getByTitle("关闭").click();
 });
 
-test("keeps multiple turns in one session until New Task resets every official page", async () => {
+test("keeps multiple turns and restores exact official URLs when switching tasks", async () => {
   await workspace.locator(".global-composer textarea").fill("同一会话的第二个问题");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   await expect(workspace.locator(".history-item")).toHaveCount(1);
-  await workspace.locator(".history-item").first().click();
+  await workspace.getByLabel("查看对话记录").first().click();
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail.locator(".turn-record")).toHaveCount(2);
   await detail.getByTitle("关闭").click();
 
+  const oldUrls = await getFrameUrls(workspace);
+  expect(
+    oldUrls.every((url) => url.includes("/totally-new/") && url.includes("?source=mock#saved")),
+  ).toBe(true);
+
   await workspace.getByRole("button", { name: "新任务" }).click();
   await expect(workspace.locator(".history-item")).toHaveCount(2);
-  for (let index = 0; index < 2; index += 1) {
-    await expect(
-      workspace.locator("article.provider-panel iframe").nth(index).contentFrame().locator("body"),
-    ).toHaveAttribute("data-new-session-count", "1");
-  }
+  expect((await getFrameUrls(workspace)).every((url) => new URL(url).pathname === "/")).toBe(true);
+
+  await workspace.locator(".global-composer textarea").fill("新任务的第一个问题");
+  await workspace.getByRole("button", { name: "发送", exact: true }).click();
+  const newUrls = await getFrameUrls(workspace);
+  expect(newUrls).not.toEqual(oldUrls);
+
+  await workspace.locator(".history-item", { hasText: "你是什么模型" }).click();
+  await expect
+    .poll(async () => await getFrameUrls(workspace), { timeout: 12_000 })
+    .toEqual(oldUrls);
+  await workspace.locator(".history-item", { hasText: "新任务的第一个问题" }).click();
+  await expect
+    .poll(async () => await getFrameUrls(workspace), { timeout: 12_000 })
+    .toEqual(newUrls);
 });
 
 test("manages all seven preconfigured websites and exposes experimental embed status", async () => {
@@ -226,6 +241,12 @@ test("keeps a native single-site follow-up independent", async () => {
 test("aborts all sends when one provider fails strict preflight", async () => {
   const panels = workspace.locator("article.provider-panel");
   const before = await getSubmitCounts(workspace);
+  await workspace.getByLabel("查看对话记录").first().click();
+  const turnsBefore = await workspace
+    .getByRole("dialog", { name: "会话历史详情" })
+    .locator(".turn-record")
+    .count();
+  await workspace.getByRole("dialog", { name: "会话历史详情" }).getByTitle("关闭").click();
   const broken = workspace.locator("article.provider-panel[data-provider='qwen']");
   const brokenFrame = broken.locator("iframe").contentFrame();
   await brokenFrame.locator("button, [role='button']").evaluateAll((elements) => {
@@ -236,6 +257,27 @@ test("aborts all sends when one provider fails strict preflight", async () => {
   await expect(broken.locator(".panel-status.status-error")).toBeVisible({ timeout: 10_000 });
   expect(await getSubmitCounts(workspace)).toEqual(before);
   await expect(panels.locator(".panel-status.status-ready")).toHaveCount(6);
+  for (let index = 0; index < (await panels.count()); index += 1) {
+    expect(
+      await panels
+        .nth(index)
+        .locator("iframe")
+        .contentFrame()
+        .locator("textarea, [contenteditable]")
+        .evaluateAll((composers) =>
+          composers.every((composer) =>
+            "value" in composer
+              ? !(composer as HTMLTextAreaElement).value
+              : !(composer.textContent ?? ""),
+          ),
+        ),
+    ).toBe(true);
+  }
+  await workspace.getByLabel("查看对话记录").first().click();
+  await expect(
+    workspace.getByRole("dialog", { name: "会话历史详情" }).locator(".turn-record"),
+  ).toHaveCount(turnsBefore);
+  await workspace.getByRole("dialog", { name: "会话历史详情" }).getByTitle("关闭").click();
   await broken.getByTitle("刷新网页").click();
   await expect(broken.locator(".panel-status.status-ready")).toBeVisible({ timeout: 12_000 });
 });
@@ -361,6 +403,21 @@ async function getSubmitCounts(page: Page): Promise<number[]> {
   return counts;
 }
 
+async function getFrameUrls(page: Page): Promise<string[]> {
+  const frames = page.locator("article.provider-panel iframe");
+  const urls: string[] = [];
+  for (let index = 0; index < (await frames.count()); index += 1) {
+    urls.push(
+      await frames
+        .nth(index)
+        .contentFrame()
+        .locator("html")
+        .evaluate(() => window.location.href),
+    );
+  }
+  return urls;
+}
+
 async function openTargetSelector(page: Page): Promise<void> {
   await page.locator(".target-summary").click();
   await expect(page.getByRole("dialog", { name: "选择发送目标" })).toBeVisible();
@@ -394,7 +451,7 @@ function mockProviderHtml(host: string): string {
       <button id="new-chat" aria-label="New chat" type="button">New chat</button>
       <textarea id="chat-input" class="ds-scroll-area" placeholder="输入问题"></textarea>
       <div id="prompt-textarea" class="ProseMirror chat-input-editor" contenteditable="true" data-lexical-editor="true" role="textbox"></div>
-      <button data-testid="composer-submit-button" class="send-button-container send-button" aria-label="Send" type="submit">Send</button>
+      <button data-testid="composer-submit-button" class="send-button-container send-button" aria-label="Send" type="submit" disabled>Send</button>
       <div data-last-prompt></div>
     </main>
     <script>
@@ -405,7 +462,10 @@ function mockProviderHtml(host: string): string {
         return values.find((value) => value.length > 0) || '';
       };
       document.addEventListener('input', (event) => {
-        if (event.target.matches('textarea, [contenteditable]')) document.body.dataset.lastSynced = readPrompt();
+        if (event.target.matches('textarea, [contenteditable]')) {
+          document.body.dataset.lastSynced = readPrompt();
+          document.querySelector('[data-testid="composer-submit-button"]').disabled = !readPrompt();
+        }
       });
       document.querySelector('#new-chat').addEventListener('click', () => {
         document.body.dataset.newSessionCount = String(Number(document.body.dataset.newSessionCount) + 1);
@@ -419,6 +479,9 @@ function mockProviderHtml(host: string): string {
       document.querySelector('[data-testid="composer-submit-button"]').addEventListener('click', () => {
           const prompt = readPrompt();
           document.body.dataset.submitCount = String(Number(document.body.dataset.submitCount) + 1);
+          if (location.pathname === '/') {
+            history.pushState({}, '', '/totally-new/' + crypto.randomUUID() + '?source=mock#saved');
+          }
           document.querySelector('[data-last-prompt]').textContent = prompt;
           const response = document.querySelector('.assistant-response') || document.createElement('div');
           response.className = 'assistant-response';
@@ -428,6 +491,7 @@ function mockProviderHtml(host: string): string {
             if ('value' in composer) composer.value = '';
             else composer.replaceChildren();
           }
+          document.querySelector('[data-testid="composer-submit-button"]').disabled = true;
       });
     </script>
   </body>

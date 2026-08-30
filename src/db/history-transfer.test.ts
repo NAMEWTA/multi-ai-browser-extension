@@ -7,6 +7,7 @@ import {
   createSession,
   createTurn,
   getSessionDetail,
+  updateSessionWorkspaceSnapshot,
 } from "./session-service";
 
 describe("history JSONL transfer", () => {
@@ -14,8 +15,21 @@ describe("history JSONL transfer", () => {
     await Promise.all([db.sessions.clear(), db.turns.clear(), db.exchanges.clear()]);
   });
 
-  it("round-trips versioned session, turn and response records with remapped IDs", async () => {
+  it("round-trips v2 workspaces and responses with remapped session, turn and panel IDs", async () => {
     const session = await createSession("导出问题");
+    await updateSessionWorkspaceSnapshot(session.id, {
+      layoutMode: "adaptive",
+      panels: [
+        {
+          panelId: "panel-ds",
+          providerId: "deepseek",
+          url: "https://chat.deepseek.com/a/chat/s/preserved?entry=home",
+          order: 0,
+          selected: false,
+          widthRatio: 2.5,
+        },
+      ],
+    });
     const turn = await createTurn(session.id, "导出问题", [
       { panelId: "panel-ds", providerId: "deepseek", providerName: "DeepSeek" },
     ]);
@@ -25,7 +39,7 @@ describe("history JSONL transfer", () => {
     expect(JSON.parse(jsonl.split("\n")[0]!)).toMatchObject({
       type: "manifest",
       format: "multi-ai-workspace-history",
-      version: 1,
+      version: 2,
     });
 
     await Promise.all([db.sessions.clear(), db.turns.clear(), db.exchanges.clear()]);
@@ -34,8 +48,23 @@ describe("history JSONL transfer", () => {
     const imported = (await db.sessions.toArray())[0]!;
     expect(imported.id).not.toBe(session.id);
     expect(imported.status).toBe("imported");
+    expect(imported.workspace).toMatchObject({
+      layoutMode: "adaptive",
+      panels: [
+        {
+          providerId: "deepseek",
+          url: "https://chat.deepseek.com/a/chat/s/preserved?entry=home",
+          selected: false,
+          widthRatio: 2.5,
+        },
+      ],
+    });
+    expect(imported.workspace?.panels[0]?.panelId).not.toBe("panel-ds");
     expect((await getSessionDetail(imported.id))?.turns[0]?.exchanges[0]?.responseText).toBe(
       "导出的最终回复",
+    );
+    expect((await getSessionDetail(imported.id))?.turns[0]?.exchanges[0]?.panelId).toBe(
+      imported.workspace?.panels[0]?.panelId,
     );
   });
 
@@ -77,5 +106,101 @@ describe("history JSONL transfer", () => {
       importHistoryJsonl(`${brokenReference.map((line) => JSON.stringify(line)).join("\n")}\n`),
     ).rejects.toThrow("turn.sessionId");
     expect(await db.sessions.count()).toBe(0);
+  });
+
+  it("rejects v2 provider URLs from the wrong origin without writing data", async () => {
+    const timestamp = "2026-08-30T10:00:00.000Z";
+    const lines = [
+      {
+        type: "manifest",
+        format: "multi-ai-workspace-history",
+        version: 2,
+        exportedAt: timestamp,
+        counts: { sessions: 1, turns: 0, exchanges: 0 },
+      },
+      {
+        type: "session",
+        data: {
+          id: "session-1",
+          title: "伪造地址",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          status: "archived",
+          workspace: {
+            layoutMode: "tiles",
+            updatedAt: timestamp,
+            panels: [
+              {
+                panelId: "panel-k",
+                providerId: "kimi",
+                url: "https://example.com/chat/stolen",
+                order: 0,
+                selected: true,
+                widthRatio: 1,
+              },
+            ],
+          },
+        },
+      },
+    ];
+    await expect(
+      importHistoryJsonl(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`),
+    ).rejects.toThrow("第 2 行格式无效");
+    expect(await db.sessions.count()).toBe(0);
+  });
+
+  it("imports an Alpha 5 v1 file with a default workspace and remapped panel ID", async () => {
+    const timestamp = "2026-08-30T10:00:00.000Z";
+    const lines = [
+      {
+        type: "manifest",
+        format: "multi-ai-workspace-history",
+        version: 1,
+        exportedAt: timestamp,
+        counts: { sessions: 1, turns: 1, exchanges: 1 },
+      },
+      {
+        type: "session",
+        data: {
+          id: "old-session",
+          title: "旧导出",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          status: "archived",
+        },
+      },
+      {
+        type: "turn",
+        data: {
+          id: "old-turn",
+          sessionId: "old-session",
+          sequence: 1,
+          prompt: "旧问题",
+          createdAt: timestamp,
+          status: "completed",
+        },
+      },
+      {
+        type: "exchange",
+        data: {
+          id: "old-exchange",
+          sessionId: "old-session",
+          turnId: "old-turn",
+          panelId: "old-panel",
+          providerId: "qwen",
+          providerName: "通义千问",
+          targetIndex: 0,
+          submitStatus: "submitted",
+          responseStatus: "completed",
+        },
+      },
+    ];
+    await importHistoryJsonl(`${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+    const imported = (await db.sessions.toArray())[0]!;
+    expect(imported.workspace?.panels[0]).toMatchObject({
+      providerId: "qwen",
+      url: "https://www.qianwen.com/",
+    });
+    expect(imported.workspace?.panels[0]?.panelId).not.toBe("old-panel");
   });
 });

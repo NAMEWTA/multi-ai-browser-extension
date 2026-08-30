@@ -2,6 +2,8 @@ import { ProviderError } from "./errors";
 
 export function isElementUsable(element: Element): element is HTMLElement {
   if (!isElementVisible(element)) return false;
+  if (element.getAttribute("aria-disabled") === "true") return false;
+  if (element.classList.contains("disabled")) return false;
   if ("disabled" in element && Boolean(element.disabled)) return false;
   return true;
 }
@@ -11,17 +13,6 @@ export function isElementVisible(element: Element): element is HTMLElement {
   if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   return !(style?.display === "none" || style?.visibility === "hidden");
-}
-
-export function findFirstVisible(
-  document: Document,
-  selectors: readonly string[],
-): HTMLElement | undefined {
-  for (const selector of selectors) {
-    const candidate = [...document.querySelectorAll(selector)].find(isElementVisible);
-    if (candidate) return candidate;
-  }
-  return undefined;
 }
 
 export function findFirstUsable(

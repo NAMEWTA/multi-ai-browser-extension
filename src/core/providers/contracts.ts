@@ -25,7 +25,6 @@ export interface ProviderDefinition {
 export interface ProviderSelectors {
   readonly composer: readonly string[];
   readonly submit: readonly string[];
-  readonly submitCandidate?: readonly string[];
   readonly login?: readonly string[];
   readonly responses?: readonly string[];
   readonly generating?: readonly string[];
@@ -70,8 +69,13 @@ export interface ProviderStrategy {
   readonly definition: ProviderDefinition;
   probe(ctx: FrameContext): Promise<ProbeResult>;
   waitUntilReady(ctx: FrameContext): Promise<void>;
+  /** Read-only validation. It must not require a send control or mutate the composer. */
   prepareSubmit(ctx: FrameContext): Promise<ResponseBaseline>;
   writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
+  /** Writes and verifies the prompt, then waits until a usable send control exists. */
+  stagePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
+  /** Clears only the prompt staged by this transaction. */
+  rollbackPrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
   submit(ctx: FrameContext): Promise<void>;
   captureResponse(
     ctx: FrameContext,

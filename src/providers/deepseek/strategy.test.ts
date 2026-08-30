@@ -29,7 +29,7 @@ describe("DeepSeekStrategy", () => {
     const strategy = new DeepSeekStrategy();
     const ctx = { document, window, timeoutMs: 100 };
     await strategy.prepareSubmit(ctx);
-    await strategy.writePrompt(ctx, { text: "发送到 DeepSeek" });
+    await strategy.stagePrompt(ctx, { text: "发送到 DeepSeek" });
     await strategy.submit(ctx);
 
     expect(sendClick).toHaveBeenCalledOnce();
@@ -45,8 +45,9 @@ describe("DeepSeekStrategy", () => {
     const strategy = new DeepSeekStrategy();
     const ctx = { document, window, timeoutMs: 100 };
     await strategy.prepareSubmit(ctx);
-    await strategy.writePrompt(ctx, { text: "下一轮问题" });
-    await expect(strategy.submit(ctx)).rejects.toMatchObject({ code: "PROVIDER_BUSY" });
+    await expect(strategy.stagePrompt(ctx, { text: "下一轮问题" })).rejects.toMatchObject({
+      code: "PROVIDER_BUSY",
+    });
     expect(click).not.toHaveBeenCalled();
 
     composer.value = "下一轮问题";
@@ -59,8 +60,10 @@ describe("DeepSeekStrategy", () => {
     const strategy = new DeepSeekStrategy();
     const ctx = { document, window, timeoutMs: 100 };
     await strategy.prepareSubmit(ctx);
-    await strategy.writePrompt(ctx, { text: "等待后的问题" });
-    control.innerHTML = '<svg><path d="new-send" /></svg>';
+    composer.addEventListener("input", () => {
+      control.innerHTML = '<svg><path d="new-send" /></svg>';
+    });
+    await strategy.stagePrompt(ctx, { text: "等待后的问题" });
     control.addEventListener("click", () => {
       composer.value = "";
     });

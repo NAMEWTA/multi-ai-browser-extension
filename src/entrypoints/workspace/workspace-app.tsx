@@ -22,24 +22,32 @@ import {
   X,
 } from "lucide-react";
 import { browser } from "wxt/browser";
-import type { ProviderRunResult } from "../../core/messaging/protocol";
+import type { ProviderResponseUpdate, ProviderRunResult } from "../../core/messaging/protocol";
 import {
   workspaceFrameStatusSchema,
+  workspacePanelUrlUpdateSchema,
   workspaceResponseUpdateSchema,
 } from "../../core/messaging/protocol";
 import { providerRegistry } from "../../core/providers/registry";
 import type { ProviderDefinition } from "../../core/providers/contracts";
-import type { ProviderExchangeRecord, SessionRecord } from "../../db/database";
+import type {
+  ExchangeResponseStatus,
+  ProviderExchangeRecord,
+  SessionRecord,
+  SessionWorkspaceSnapshot,
+} from "../../db/database";
 import {
+  activateSession,
   applyResponseUpdate,
-  applySubmitResults,
   createSession,
-  createTurn,
   deleteSession,
-  ensureActiveSession,
+  getActiveSession,
   getSessionDetail,
   listSessions,
   migrateLegacyHistory,
+  recordSuccessfulTurn,
+  updateSessionWorkspaceSnapshot,
+  type BufferedResponseUpdate,
   type SessionDetail,
 } from "../../db/session-service";
 import {
@@ -50,16 +58,21 @@ import {
 } from "../../db/history-transfer";
 import { useWorkspaceStore, type WorkspacePanel } from "./workspace-store";
 
+let workspaceSessionBootstrap: Promise<SessionRecord> | undefined;
+
 export function WorkspaceApp() {
   const panels = useWorkspaceStore((state) => state.panels);
   const selectedTargetIds = useWorkspaceStore((state) => state.selectedTargetIds);
   const sidebarOpen = useWorkspaceStore((state) => state.sidebarOpen);
   const layoutMode = useWorkspaceStore((state) => state.layoutMode);
+  const tileRatios = useWorkspaceStore((state) => state.tileRatios);
   const hydrated = useWorkspaceStore((state) => state.hydrated);
   const hydrate = useWorkspaceStore((state) => state.hydrate);
   const setSidebarOpen = useWorkspaceStore((state) => state.setSidebarOpen);
   const setLayoutMode = useWorkspaceStore((state) => state.setLayoutMode);
   const setPanelStatus = useWorkspaceStore((state) => state.setPanelStatus);
+  const setPanelUrl = useWorkspaceStore((state) => state.setPanelUrl);
+  const restoreSnapshot = useWorkspaceStore((state) => state.restoreSnapshot);
   const [prompt, setPrompt] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -68,10 +81,16 @@ export function WorkspaceApp() {
   const [history, setHistory] = useState<SessionRecord[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [details, setDetails] = useState<SessionDetail>();
+  const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [switchingSession, setSwitchingSession] = useState(false);
   const [runtimeReady, setRuntimeReady] = useState(false);
   const [layoutResetKey, setLayoutResetKey] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const pendingTurnIdsRef = useRef(new Set<string>());
+  const responseBufferRef = useRef(
+    new Map<string, Map<string, Omit<ProviderResponseUpdate, "type">>>(),
+  );
 
   const refreshHistory = useCallback(async () => {
     setHistory(await listSessions());
@@ -79,19 +98,44 @@ export function WorkspaceApp() {
 
   useEffect(() => {
     let mounted = true;
-    void hydrate();
-    void migrateLegacyHistory()
-      .then(() => listSessions())
-      .then((records) => {
-        if (mounted) setHistory(records);
-      });
+    void (async () => {
+      await hydrate();
+      workspaceSessionBootstrap ??= bootstrapWorkspaceSession();
+      const active = await workspaceSessionBootstrap;
+      if (active.workspace?.panels.length) {
+        restoreSnapshot(active.workspace);
+      }
+      if (!mounted) return;
+      setActiveSessionId(active.id);
+      setHistory(await listSessions());
+    })();
     void browser.runtime.sendMessage({ type: "WORKSPACE_READY" }).then((response) => {
       if (mounted && (response as { ok?: boolean } | undefined)?.ok) setRuntimeReady(true);
     });
     return () => {
       mounted = false;
     };
-  }, [hydrate, refreshHistory]);
+  }, [hydrate, restoreSnapshot]);
+
+  useEffect(() => {
+    if (!hydrated || !activeSessionId || switchingSession || startingSession) return;
+    const timer = window.setTimeout(() => {
+      void updateSessionWorkspaceSnapshot(activeSessionId, captureWorkspaceSnapshot())
+        .then(refreshHistory)
+        .catch(() => undefined);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeSessionId,
+    hydrated,
+    layoutMode,
+    panels,
+    refreshHistory,
+    selectedTargetIds,
+    startingSession,
+    switchingSession,
+    tileRatios,
+  ]);
 
   useEffect(() => {
     const listener = (raw: unknown) => {
@@ -113,6 +157,17 @@ export function WorkspaceApp() {
         return { ok: true };
       }
 
+      const urlUpdate = workspacePanelUrlUpdateSchema.safeParse(raw);
+      if (urlUpdate.success) {
+        const current = useWorkspaceStore
+          .getState()
+          .panels.find((panel) => panel.id === urlUpdate.data.panelId);
+        if (current?.providerId === urlUpdate.data.providerId) {
+          setPanelUrl(urlUpdate.data.panelId, urlUpdate.data.url);
+        }
+        return { ok: true };
+      }
+
       const response = workspaceResponseUpdateSchema.safeParse(raw);
       if (!response.success) return undefined;
       const data = response.data;
@@ -125,13 +180,13 @@ export function WorkspaceApp() {
             : "ready",
         data.message,
       );
-      void applyResponseUpdate(
-        data.turnId,
-        data.panelId,
-        data.status,
-        data.text,
-        data.message,
-      ).then(async () => {
+      if (pendingTurnIdsRef.current.has(data.turnId)) {
+        const byPanel = responseBufferRef.current.get(data.turnId) ?? new Map();
+        byPanel.set(data.panelId, data);
+        responseBufferRef.current.set(data.turnId, byPanel);
+        return { ok: true };
+      }
+      void persistResponseUpdate(data).then(async () => {
         await refreshHistory();
         if (details?.session.id === data.sessionId)
           setDetails(await getSessionDetail(data.sessionId));
@@ -140,7 +195,7 @@ export function WorkspaceApp() {
     };
     browser.runtime.onMessage.addListener(listener);
     return () => browser.runtime.onMessage.removeListener(listener);
-  }, [details?.session.id, refreshHistory, setPanelStatus]);
+  }, [details?.session.id, refreshHistory, setPanelStatus, setPanelUrl]);
 
   const activeMaximized = panels.some((panel) => panel.id === maximized) ? maximized : undefined;
   const filteredHistory = useMemo(() => {
@@ -157,37 +212,27 @@ export function WorkspaceApp() {
     const state = useWorkspaceStore.getState();
     return state.panels
       .filter((panel) => state.selectedTargetIds.includes(panel.id))
-      .map((panel) => {
-        const definition = providerRegistry.get(panel.providerId).definition;
-        return {
-          panelId: panel.id,
-          providerId: panel.providerId,
-          url: definition.defaultUrl,
-        };
-      });
+      .map((panel) => ({
+        panelId: panel.id,
+        providerId: panel.providerId,
+        url: panel.url,
+      }));
   }
 
   async function submitPrompt() {
     const text = prompt.trim();
     const targets = currentTargets();
-    if (!text || !targets.length || sending) return;
-    const session = await ensureActiveSession(text);
-    const turn = await createTurn(
-      session.id,
-      text,
-      targets.map((target) => ({
-        panelId: target.panelId,
-        providerId: target.providerId,
-        providerName: providerRegistry.get(target.providerId).definition.name,
-      })),
-    );
+    const sessionId = activeSessionId;
+    if (!text || !targets.length || !sessionId || sending || switchingSession) return;
+    const turnId = crypto.randomUUID();
+    pendingTurnIdsRef.current.add(turnId);
     setSending(true);
     for (const target of targets) setPanelStatus(target.panelId, "submitting");
     try {
       const results = (await browser.runtime.sendMessage({
         type: "WORKSPACE_SUBMIT",
-        sessionId: session.id,
-        turnId: turn.id,
+        sessionId,
+        turnId,
         prompt: text,
         targets,
       })) as ProviderRunResult[];
@@ -206,57 +251,87 @@ export function WorkspaceApp() {
           result.message,
         );
       }
-      await applySubmitResults(turn.id, results);
-      await refreshHistory();
-      if (
-        results.some((result) => result.status === "submitted" || result.status === "duplicate")
-      ) {
-        setPrompt("");
-      }
-      inputRef.current?.focus();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "发送事务失败";
-      await applySubmitResults(
-        turn.id,
-        targets.map((target) => ({ panelId: target.panelId, status: "unavailable", message })),
+      const submitted = results.some(
+        (result) => result.status === "submitted" || result.status === "duplicate",
       );
+      if (!submitted) {
+        responseBufferRef.current.delete(turnId);
+        return;
+      }
+      const earlyResponses = responseBufferRef.current.get(turnId);
+      responseBufferRef.current.delete(turnId);
+      await recordSuccessfulTurn(
+        sessionId,
+        text,
+        targets.map((target) => ({
+          panelId: target.panelId,
+          providerId: target.providerId,
+          providerName: providerRegistry.get(target.providerId).definition.name,
+        })),
+        results,
+        earlyResponses ? [...earlyResponses.values()].map(toBufferedResponseUpdate) : [],
+        turnId,
+      );
+      await flushBufferedResponses(turnId);
+      pendingTurnIdsRef.current.delete(turnId);
       await refreshHistory();
+      setPrompt("");
+      inputRef.current?.focus();
+    } catch {
+      responseBufferRef.current.delete(turnId);
     } finally {
+      pendingTurnIdsRef.current.delete(turnId);
       setSending(false);
     }
   }
 
+  async function flushBufferedResponses(turnId: string) {
+    let buffered = responseBufferRef.current.get(turnId);
+    while (buffered?.size) {
+      responseBufferRef.current.delete(turnId);
+      await Promise.all([...buffered.values()].map((update) => persistResponseUpdate(update)));
+      buffered = responseBufferRef.current.get(turnId);
+    }
+  }
+
   async function startNewTask() {
-    if (sending || startingSession) return;
+    if (sending || startingSession || switchingSession) return;
     setStartingSession(true);
     const sessionId = crypto.randomUUID();
-    const targets = useWorkspaceStore.getState().panels.map((panel) => ({
-      panelId: panel.id,
-      providerId: panel.providerId,
-      url: providerRegistry.get(panel.providerId).definition.defaultUrl,
-    }));
     try {
-      const results = targets.length
-        ? ((await browser.runtime.sendMessage({
-            type: "WORKSPACE_NEW_SESSION",
-            sessionId,
-            targets,
-          })) as ProviderRunResult[])
-        : [];
-      for (const result of results) {
-        const succeeded = result.status === "submitted" || result.status === "duplicate";
-        setPanelStatus(result.panelId, succeeded ? "ready" : "error", result.message);
-        if (!succeeded && useWorkspaceStore.getState().selectedTargetIds.includes(result.panelId)) {
-          useWorkspaceStore.getState().toggleTarget(result.panelId);
-        }
+      if (activeSessionId) {
+        await updateSessionWorkspaceSnapshot(activeSessionId, captureWorkspaceSnapshot());
       }
-      await createSession("", sessionId);
+      const fresh = createFreshWorkspace(captureWorkspaceSnapshot());
+      await createSession("", sessionId, fresh);
+      restoreSnapshot(fresh);
+      setActiveSessionId(sessionId);
       setPrompt("");
       setDetails(undefined);
+      setMaximized(undefined);
       await refreshHistory();
       inputRef.current?.focus();
     } finally {
       setStartingSession(false);
+    }
+  }
+
+  async function switchHistory(record: SessionRecord) {
+    if (sending || startingSession || switchingSession || record.id === activeSessionId) return;
+    setSwitchingSession(true);
+    try {
+      if (activeSessionId) {
+        await updateSessionWorkspaceSnapshot(activeSessionId, captureWorkspaceSnapshot());
+      }
+      const session = await activateSession(record.id);
+      if (session.workspace) restoreSnapshot(session.workspace);
+      setActiveSessionId(session.id);
+      setPrompt("");
+      setDetails(undefined);
+      setMaximized(undefined);
+      await refreshHistory();
+    } finally {
+      setSwitchingSession(false);
     }
   }
 
@@ -268,6 +343,12 @@ export function WorkspaceApp() {
     if (!window.confirm("删除这个会话及其全部问答记录？")) return;
     await deleteSession(record.id);
     if (details?.session.id === record.id) setDetails(undefined);
+    if (activeSessionId === record.id) {
+      const fresh = createFreshWorkspace(captureWorkspaceSnapshot());
+      const replacement = await createSession("", crypto.randomUUID(), fresh);
+      restoreSnapshot(fresh);
+      setActiveSessionId(replacement.id);
+    }
     await refreshHistory();
   }
 
@@ -336,7 +417,7 @@ export function WorkspaceApp() {
           <button
             className="new-task-button"
             type="button"
-            disabled={sending || startingSession}
+            disabled={sending || startingSession || switchingSession}
             onClick={() => void startNewTask()}
           >
             {startingSession ? <RefreshCw className="spin" size={17} /> : <Plus size={17} />}
@@ -360,18 +441,28 @@ export function WorkspaceApp() {
             {filteredHistory.length ? (
               filteredHistory.map((record) => (
                 <div
-                  className={`history-row ${details?.session.id === record.id ? "active" : ""}`}
+                  className={`history-row ${activeSessionId === record.id ? "active" : ""}`}
                   key={record.id}
                 >
                   <button
                     className="history-item"
                     type="button"
-                    onClick={() => void openHistory(record)}
+                    disabled={switchingSession}
+                    onClick={() => void switchHistory(record)}
                   >
                     <span>{record.title}</span>
                     <small>
                       {sessionStatusLabel(record.status)} · {formatTime(record.updatedAt)}
                     </small>
+                  </button>
+                  <button
+                    className="history-delete"
+                    type="button"
+                    title="查看对话记录"
+                    aria-label="查看对话记录"
+                    onClick={() => void openHistory(record)}
+                  >
+                    <History size={14} />
                   </button>
                   <button
                     className="history-delete"
@@ -506,7 +597,13 @@ export function WorkspaceApp() {
               type="button"
               title="发送到已选择的网页"
               aria-label="发送"
-              disabled={!prompt.trim() || sending || selectedTargetIds.length === 0}
+              disabled={
+                !prompt.trim() ||
+                !activeSessionId ||
+                sending ||
+                switchingSession ||
+                selectedTargetIds.length === 0
+              }
               onClick={() => void submitPrompt()}
             >
               {sending ? <RefreshCw className="spin" size={19} /> : <Send size={19} />}
@@ -531,7 +628,10 @@ export function WorkspaceApp() {
             </div>
           ) : (
             <PanelLayout
-              key={`${panels.map((panel) => panel.id).join("|")}:${layoutResetKey}`}
+              key={`${panels
+                .map((panel) => panel.id)
+                .toSorted()
+                .join("|")}:${layoutResetKey}`}
               panels={panels}
               layoutMode={layoutMode}
               maximized={activeMaximized}
@@ -891,7 +991,7 @@ function ProviderPanel({
                 type: "OPEN_PANEL_TAB",
                 panelId: panel.id,
                 providerId: panel.providerId,
-                url: definition.defaultUrl,
+                url: panel.url,
               })
             }
           >
@@ -910,7 +1010,7 @@ function ProviderPanel({
       <ProviderViewport
         panelId={panel.id}
         providerName={definition.name}
-        url={definition.defaultUrl}
+        url={panel.url}
         maximized={maximized}
         onConnectionTimeout={() => {
           const current = useWorkspaceStore.getState().panels.find((item) => item.id === panel.id);
@@ -935,12 +1035,13 @@ function ProviderViewport({
   maximized: boolean;
   onConnectionTimeout(): void;
 }) {
+  const [initialUrl] = useState(url);
   return (
     <div className="provider-viewport">
       <iframe
         id={`provider-frame-${panelId}`}
         name={`maw:${panelId}`}
-        src={url}
+        src={initialUrl}
         title={`${providerName} 网页`}
         allow="clipboard-read; clipboard-write"
         onLoad={() => window.setTimeout(onConnectionTimeout, 10_000)}
@@ -1094,6 +1195,71 @@ function SessionHistoryDetail({ detail, onClose }: { detail: SessionDetail; onCl
         </div>
       </aside>
     </div>
+  );
+}
+
+function captureWorkspaceSnapshot(): SessionWorkspaceSnapshot {
+  const state = useWorkspaceStore.getState();
+  return {
+    layoutMode: state.layoutMode,
+    panels: state.panels.map((panel, order) => ({
+      panelId: panel.id,
+      providerId: panel.providerId,
+      url: panel.url,
+      order,
+      selected: state.selectedTargetIds.includes(panel.id),
+      widthRatio: state.tileRatios[panel.id] ?? 1,
+    })),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function bootstrapWorkspaceSession(): Promise<SessionRecord> {
+  await migrateLegacyHistory();
+  const active = await getActiveSession();
+  if (!active) {
+    return await createSession("", crypto.randomUUID(), captureWorkspaceSnapshot());
+  }
+  if (active.workspace?.panels.length) return active;
+  return {
+    ...active,
+    workspace: await updateSessionWorkspaceSnapshot(active.id, captureWorkspaceSnapshot()),
+  };
+}
+
+function createFreshWorkspace(current: SessionWorkspaceSnapshot): SessionWorkspaceSnapshot {
+  return {
+    layoutMode: current.layoutMode,
+    panels: current.panels.map((panel, order) => ({
+      ...panel,
+      panelId: crypto.randomUUID(),
+      url: providerRegistry.get(panel.providerId).definition.defaultUrl,
+      order,
+    })),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function toBufferedResponseUpdate(
+  update: Omit<ProviderResponseUpdate, "type">,
+): BufferedResponseUpdate {
+  return {
+    panelId: update.panelId,
+    status: update.status,
+    ...(update.text !== undefined ? { responseText: update.text } : {}),
+    ...(update.message !== undefined ? { message: update.message } : {}),
+  };
+}
+
+async function persistResponseUpdate(
+  update: Omit<ProviderResponseUpdate, "type"> & { status: ExchangeResponseStatus },
+): Promise<void> {
+  await applyResponseUpdate(
+    update.turnId,
+    update.panelId,
+    update.status,
+    update.text,
+    update.message,
   );
 }
 

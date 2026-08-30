@@ -1,7 +1,7 @@
 # Multi AI Workspace 技术架构
 
 > 状态：当前唯一技术基线
-> 版本：4.0
+> 版本：5.0
 > 更新日期：2026-08-30
 
 ## 1. 架构结论
@@ -16,14 +16,14 @@ Workspace extension page
              │ runtime messages
 MV3 Service Worker
   ├─ frame / fallback-tab registry
-  ├─ strict prepare barrier + concurrent commit
+  ├─ precheck / stage barriers + concurrent commit
   ├─ response event forwarding
   └─ session DNR iframe policy
              │ Port or frame message
 Provider Content Script
-  ├─ readiness and zero-mutation preflight
-  ├─ native composer write/readback/submit
-  ├─ official new-conversation action
+  ├─ readiness and zero-mutation precheck
+  ├─ stage, rollback and one-shot submit
+  ├─ exact location.href reporting
   └─ visible assistant-response capture
 ```
 
@@ -33,56 +33,64 @@ Provider Content Script
 
 所有跨边界消息使用 Zod 验证，并校验 `panelId`、Provider、sender tab、frameId 和已登记 origin。
 
-| 消息                        | 方向                | 作用                       |
-| --------------------------- | ------------------- | -------------------------- |
-| `FRAME_HELLO`               | Provider -> Worker  | 注册或恢复面板绑定         |
-| `FRAME_STATUS`              | Provider -> Worker  | 上报加载、登录和就绪状态   |
-| `WORKSPACE_SUBMIT`          | Workspace -> Worker | 冻结一轮发送及全部目标     |
-| `PREPARE_PROMPT`            | Worker -> Provider  | 无副作用预检并取得回复基线 |
-| `COMMIT_PROMPT`             | Worker -> Provider  | 写入、回读、点击并开始采集 |
-| `PROVIDER_RESPONSE_UPDATE`  | Provider -> Worker  | 上报等待、流式文本或终态   |
-| `WORKSPACE_RESPONSE_UPDATE` | Worker -> Workspace | 转发回复更新并写入历史     |
-| `WORKSPACE_NEW_SESSION`     | Workspace -> Worker | 请求全部已打开面板新建会话 |
-| `START_NEW_CONVERSATION`    | Worker -> Provider  | 点击并确认官网新对话       |
-| `OPEN_PANEL_TAB`            | Workspace -> Worker | 使用普通标签页降级         |
+| 消息                         | 方向                | 作用                         |
+| ---------------------------- | ------------------- | ---------------------------- |
+| `FRAME_HELLO`                | Provider -> Worker  | 注册或恢复面板绑定           |
+| `FRAME_STATUS`               | Provider -> Worker  | 上报加载、登录和就绪状态     |
+| `WORKSPACE_SUBMIT`           | Workspace -> Worker | 冻结一轮发送及全部目标       |
+| `PRECHECK_PROMPT`            | Worker -> Provider  | 无副作用预检并取得回复基线   |
+| `STAGE_PROMPT`               | Worker -> Provider  | 写入、回读并等待可用发送控件 |
+| `ROLLBACK_PROMPT`            | Worker -> Provider  | 清除仍属于本轮的暂存内容     |
+| `COMMIT_PROMPT`              | Worker -> Provider  | 点击一次并开始回复采集       |
+| `PROVIDER_RESPONSE_UPDATE`   | Provider -> Worker  | 上报等待、流式文本或终态     |
+| `WORKSPACE_RESPONSE_UPDATE`  | Worker -> Workspace | 转发回复更新并写入历史       |
+| `PROVIDER_URL_UPDATE`        | Provider -> Worker  | 原样上报当前完整 href        |
+| `WORKSPACE_PANEL_URL_UPDATE` | Worker -> Workspace | 转发已验证的官方完整 URL     |
+| `OPEN_PANEL_TAB`             | Workspace -> Worker | 使用普通标签页降级           |
 
 协议中不存在草稿同步命令。输入事件不会跨越工作台边界。
 
-## 3. 两阶段发送
+## 3. 三阶段发送
 
 ### 3.1 冻结
 
-点击发送时工作台生成不可变的 `sessionId` 和 `turnId`，冻结经过 trim 的 prompt 与目标快照，并先创建本地 Turn/Exchange 记录。
+点击发送时工作台生成不可变的 `sessionId` 和临时 `turnId`，冻结经过 trim 的 prompt 与目标快照。此时不创建 Turn/Exchange。
 
-### 3.2 Prepare barrier
+### 3.2 Precheck barrier
 
-Worker 并发向全部目标发送 `PREPARE_PROMPT`。Provider 必须完成：
+Worker 并发向全部目标发送 `PRECHECK_PROMPT`。Provider 必须完成：
 
 1. URL、登录和 composer 就绪检查。
 2. composer 为空检查，禁止覆盖官网中的用户草稿。
 3. 上一条回复不处于生成状态。
-4. 可见发送控件存在；允许空输入时原生 disabled。
-5. 记录当前可见 assistant response 的数量和最后文本，作为本轮基线。
+4. 记录当前可见 assistant response 的数量和最后文本，作为本轮基线。
 
-Prepare 不聚焦、不写入、不点击。如果任一结果不是 `prepared/duplicate`，Worker 把其他成功预检结果转换为 `aborted` 并直接返回，整个批次零点击。
+Precheck 不聚焦、不写入、不查找发送按钮、不点击。空 composer 状态下，官网按钮可能 disabled 或根本未渲染。如果任一结果不是 `prechecked/duplicate`，Worker 清理其他预检状态并直接返回。
 
-### 3.3 Concurrent commit
+### 3.3 Stage barrier 与 rollback
+
+全部预检通过后，Worker 并发发送 `STAGE_PROMPT`。每个 Provider 原生写入 prompt、回读校验，并等待相邻的唯一可用发送控件，但不点击。
+
+任一目标暂存失败时，失败 Provider 先自清理，Worker 再向全部已暂存目标发送 `ROLLBACK_PROMPT`。回滚只在 composer 当前值仍严格等于本轮 prompt 时清空，避免删除用户后续编辑。该批次不创建历史轮次。
+
+### 3.4 Concurrent commit
 
 全部通过后，Worker 并发发送 `COMMIT_PROMPT`。每个 Provider 串行执行：
 
 ```text
-write native composer
-  -> dispatch native input/change events
-  -> read back normalized text
-  -> locate enabled semantic send control near composer
+use staged composer and submit control
+  -> revalidate enabled semantic control
   -> click once
   -> confirm composer/page/control state changed
+  -> immediately report current full location.href
   -> launch response capture outside command queue
 ```
 
-Provider 使用 `TaskLedger` 对 `turnId` 去重。Prepare 与 Commit 使用独立 operation key，避免相同 `turnId` 的两个阶段互相抢占 pending response。
+Provider 使用 phase record 与 `TaskLedger` 对 `turnId` 去重，要求状态严格按 prechecked -> staged -> submitted 推进。
 
 浏览器无法回滚已发生的跨站点击。因此“原子性”严格保证到 commit barrier；commit 内的运行时单站失败记录为部分提交，而不是虚构全局回滚。
+
+至少一个目标返回 `submitted/duplicate` 后，工作台才调用 `recordSuccessfulTurn`，在单个 Dexie 事务内创建 Turn、Exchange、逐站结果并合并早到回复。全失败不落库。
 
 ## 4. Provider 合同
 
@@ -91,6 +99,8 @@ interface ProviderStrategy {
   probe(ctx: FrameContext): Promise<ProbeResult>;
   waitUntilReady(ctx: FrameContext): Promise<void>;
   prepareSubmit(ctx: FrameContext): Promise<ResponseBaseline>;
+  stagePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
+  rollbackPrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
   writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void>;
   submit(ctx: FrameContext): Promise<void>;
   captureResponse(ctx, baseline, onUpdate): Promise<ResponseCaptureUpdate>;
@@ -104,9 +114,9 @@ interface ProviderStrategy {
 
 ### 4.2 Template Method
 
-`BaseDomStrategy` 固化预检、原生写入、提交确认、回复稳定判定和新会话确认。站点策略仅覆写特殊编辑器或复用控件行为。
+`BaseDomStrategy` 固化预检、暂存、条件回滚、提交确认和回复稳定判定。站点策略仅覆写特殊编辑器或复用控件行为。
 
-Kimi Lexical 使用浏览器原生编辑命令并回读，不直接伪造 React/Lexical 内部状态。DeepSeek 的圆形控件会在“发送/停止”之间复用：Prepare 在空 composer 时记录控件指纹，Commit 写入后只有指纹发生变化才允许点击。
+Kimi Lexical 使用浏览器原生编辑命令并回读，不直接伪造 React/Lexical 内部状态。DeepSeek 的圆形控件会在“发送/停止”之间复用，因此在 Stage 写入后校验控件语义，避免空输入状态误判或点击停止。
 
 ### 4.3 Selector 顺序
 
@@ -124,11 +134,13 @@ Kimi Lexical 使用浏览器原生编辑命令并回读，不直接伪造 React/
 
 采集只使用 DOM 可见文本，不读取 Cookie、localStorage、IndexedDB、Fetch/XHR 或内部 API。单条回复协议上限 2 MB。
 
-## 6. 新建会话
+## 6. Session 与官网 URL 持久化
 
-“新任务”不是清空工作台输入框的别名。Worker 向所有已打开面板发送 `START_NEW_CONVERSATION`。Provider 通过语义 selector 或可访问名称定位官方按钮，点击后确认 URL 变化、旧回复减少或空会话 composer 稳定。
+Provider 直接读取 `window.location.href`，不识别、不拼接任何会话路径。Worker 只验证 URL 为 HTTPS、sender frame 绑定正确且 origin 属于对应 Provider，随后原样转发 Workspace。
 
-工作台随后归档当前 active Session 并创建新 Session。失败面板显示错误并从发送目标中取消，避免新旧官网上下文混入同一轮。
+Session 快照保存 `layoutMode` 以及按顺序排列的 `{panelId, providerId, url, selected, widthRatio}`。切换任务前强制保存当前快照，再激活目标 Session 并以其完整 URL 和新 iframe 实例恢复。
+
+“新任务”不会在旧 iframe 中点击官网按钮，因为这会破坏旧任务上下文。它克隆当前站点组合、布局、选择和比例，但生成全新 panel ID，并把 URL 重置为各官网基础 URL。首次发送后正式会话 URL 覆盖该快照。
 
 ## 7. 数据模型
 
@@ -136,6 +148,7 @@ Kimi Lexical 使用浏览器原生编辑命令并回读，不直接伪造 React/
 SessionRecord {
   id; title; createdAt; updatedAt;
   status: "active" | "archived" | "imported";
+  workspace?: SessionWorkspaceSnapshot;
 }
 
 TurnRecord {
@@ -151,7 +164,7 @@ ProviderExchangeRecord {
 }
 ```
 
-Dexie 使用数据库 `multi-ai-workspace-v3` 的 schema version 2。旧 `sendRecords` 表保留用于单次迁移；迁移完成标记写入 `metadata`，后续新功能不再写旧表。
+Dexie 使用数据库 `multi-ai-workspace-v3` 的 schema version 3。旧 `sendRecords` 和无 workspace 的 Session 通过独立迁移标记一次性升级；后续新功能不再写旧表。
 
 Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；存在有效回复和失败/超时为 `partial`；无有效回复为 `failed`。
 
@@ -160,13 +173,13 @@ Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；�
 文件扩展名 `.maiw.jsonl`，UTF-8，每行独立 JSON：
 
 ```json
-{"type":"manifest","format":"multi-ai-workspace-history","version":1,"exportedAt":"...","counts":{"sessions":1,"turns":2,"exchanges":4}}
+{"type":"manifest","format":"multi-ai-workspace-history","version":2,"exportedAt":"...","counts":{"sessions":1,"turns":2,"exchanges":4}}
 {"type":"session","data":{}}
 {"type":"turn","data":{}}
 {"type":"exchange","data":{}}
 ```
 
-导入上限 50 MB。解析器要求首行 manifest、唯一 manifest、清单数量一致、实体 ID 唯一、引用完整、Provider ID 受支持。全部校验通过后才在单个 Dexie 事务中写入；Session、Turn、Exchange ID 全部重映射。
+导入上限 50 MB。解析器兼容 v1/v2，要求首行 manifest、唯一 manifest、清单数量一致、实体 ID 唯一、引用完整、Provider ID 受支持。快照 URL 必须属于对应官方 HTTPS origin。全部校验通过后才在单个 Dexie 事务中写入；Session、Turn、Exchange 和 Panel ID 全部重映射。
 
 ## 9. 生命周期、权限与隐私
 
@@ -187,11 +200,11 @@ Turn 终态由 Exchange 聚合：全部已提交站点完成为 `completed`；�
 
 ## 11. 验证分层
 
-| 层级             | 重点                                                        |
-| ---------------- | ----------------------------------------------------------- |
-| 单元             | Zod 协议、DOM adapter、幂等、Session 聚合、迁移、JSONL      |
-| Provider fixture | Prepare 零副作用、原生写入、唯一提交、回复完成、新对话      |
-| 扩展 E2E         | 草稿隔离、严格 barrier、同 Session 多轮、回复落库、布局稳定 |
-| 真实 smoke       | 最终 URL、登录态、真实 selector、一次发送和降级             |
+| 层级             | 重点                                                       |
+| ---------------- | ---------------------------------------------------------- |
+| 单元             | Zod 协议、DOM adapter、幂等、Session 聚合、迁移、JSONL     |
+| Provider fixture | Precheck 零副作用、Stage 回滚、唯一提交、回复完成          |
+| 扩展 E2E         | 动态按钮、Stage 回滚、失败零 Turn、完整 URL 往返、布局稳定 |
+| 真实 smoke       | 最终 URL、登录态、真实 selector、一次发送和降级            |
 
 Mock E2E 证明扩展编排，不证明真实官网长期兼容。真实 smoke 必须使用专用账号、非敏感提示词并控制频率。

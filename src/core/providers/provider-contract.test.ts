@@ -64,7 +64,8 @@ describe("Provider plugin contract", () => {
       const strategy = plugin.createStrategy();
       const ctx = { document, window, timeoutMs: 100 };
       await expect(strategy.probe(ctx)).resolves.toMatchObject({ status: "ready" });
-      await strategy.writePrompt(ctx, { text: "花儿为什么这么红？\n第二行" });
+      await strategy.prepareSubmit(ctx);
+      await strategy.stagePrompt(ctx, { text: "花儿为什么这么红？\n第二行" });
       await strategy.submit(ctx);
 
       const value = composer instanceof HTMLTextAreaElement ? composer.value : composer.textContent;

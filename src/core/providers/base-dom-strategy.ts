@@ -11,7 +11,6 @@ import type {
 import {
   findAllUsable,
   findFirstUsable,
-  findFirstVisible,
   findUsableByText,
   normalizeComposerValue,
   readComposerValue,
@@ -24,6 +23,7 @@ import { CompositeComposerWriter } from "./writers/composer-writer";
 
 export abstract class BaseDomStrategy implements ProviderStrategy {
   protected activeComposer: HTMLElement | undefined;
+  protected stagedSubmitControl: HTMLElement | undefined;
 
   protected constructor(
     readonly definition: ProviderDefinition,
@@ -60,13 +60,11 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     if (normalizeComposerValue(readComposerValue(composer))) {
       throw new ProviderError("COMPOSER_NOT_EMPTY", "官网输入框已有未发送内容，请先清空后重试");
     }
-    if (!findFirstVisible(ctx.document, this.selectors.submitCandidate ?? this.selectors.submit)) {
-      throw new ProviderError("SUBMIT_MISSING", "未找到发送控件，站点页面结构可能已更新");
-    }
     if (this.selectors.generating && findFirstUsable(ctx.document, this.selectors.generating)) {
       throw new ProviderError("PROVIDER_BUSY", "官网仍在生成上一条回复，请等待完成后重试");
     }
     this.activeComposer = undefined;
+    this.stagedSubmitControl = undefined;
     return this.responseBaseline(ctx.document);
   }
 
@@ -79,17 +77,50 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     this.activeComposer = composer;
   }
 
-  async submit(ctx: FrameContext): Promise<void> {
-    const composer = this.activeComposer;
-    const promptBeforeSubmit = composer ? normalizeComposerValue(readComposerValue(composer)) : "";
-    const urlBeforeSubmit = ctx.window.location.href;
+  async stagePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void> {
+    await this.writePrompt(ctx, prompt);
     const button = await waitForElement(ctx.document, this.selectors.submit, {
       signal: ctx.signal,
       timeoutMs: Math.min(ctx.timeoutMs ?? 15_000, 5_000),
       anchor: this.activeComposer,
     }).catch((error: unknown) => {
-      throw new ProviderError("SUBMIT_MISSING", "未找到可用的发送按钮", { cause: error });
+      throw new ProviderError("SUBMIT_MISSING", "写入内容后仍未找到可用的发送按钮", {
+        cause: error,
+      });
     });
+    this.validateStagedSubmitControl(button);
+    this.stagedSubmitControl = button;
+  }
+
+  async rollbackPrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void> {
+    const composer = this.activeComposer;
+    if (
+      composer?.isConnected &&
+      normalizeComposerValue(readComposerValue(composer)) === normalizeComposerValue(prompt.text)
+    ) {
+      await this.writePrompt(ctx, { text: "" });
+    }
+    this.activeComposer = undefined;
+    this.stagedSubmitControl = undefined;
+  }
+
+  async submit(ctx: FrameContext): Promise<void> {
+    const composer = this.activeComposer;
+    const promptBeforeSubmit = composer ? normalizeComposerValue(readComposerValue(composer)) : "";
+    const urlBeforeSubmit = ctx.window.location.href;
+    const button =
+      this.stagedSubmitControl?.isConnected &&
+      findFirstUsable(ctx.document, this.selectors.submit, this.activeComposer) ===
+        this.stagedSubmitControl
+        ? this.stagedSubmitControl
+        : await waitForElement(ctx.document, this.selectors.submit, {
+            signal: ctx.signal,
+            timeoutMs: Math.min(ctx.timeoutMs ?? 15_000, 5_000),
+            anchor: this.activeComposer,
+          }).catch((error: unknown) => {
+            throw new ProviderError("SUBMIT_MISSING", "未找到可用的发送按钮", { cause: error });
+          });
+    this.validateStagedSubmitControl(button);
     this.submitter.submit(button);
     await waitForCondition(
       () => {
@@ -109,6 +140,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     ).catch((error: unknown) => {
       throw new ProviderError("SUBMIT_UNCONFIRMED", "网页未确认消息已发送", { cause: error });
     });
+    this.stagedSubmitControl = undefined;
   }
 
   async captureResponse(
@@ -186,6 +218,11 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       });
     });
     this.activeComposer = undefined;
+    this.stagedSubmitControl = undefined;
+  }
+
+  protected validateStagedSubmitControl(button: HTMLElement): void {
+    void button;
   }
 
   protected responseBaseline(document: Document): ResponseBaseline {

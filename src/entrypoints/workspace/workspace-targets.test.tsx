@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { providerIds, type ProviderId } from "../../core/providers/contracts";
+import { providerRegistry } from "../../core/providers/registry";
 
 const { storageGet, storageSet } = vi.hoisted(() => ({
   storageGet: vi.fn(),
@@ -76,12 +77,16 @@ describe("workspace targets", () => {
   });
 
   it("keeps the composer summary compact with eleven open websites", () => {
-    const panels: WorkspacePanel[] = Array.from({ length: 11 }, (_, index) => ({
-      id: `panel-${index}`,
-      providerId: providerIds[index % providerIds.length] as ProviderId,
-      status: "ready",
-      revision: 0,
-    }));
+    const panels: WorkspacePanel[] = Array.from({ length: 11 }, (_, index) => {
+      const providerId = providerIds[index % providerIds.length] as ProviderId;
+      return {
+        id: `panel-${index}`,
+        providerId,
+        url: providerRegistry.get(providerId).definition.defaultUrl,
+        status: "ready",
+        revision: 0,
+      };
+    });
     useWorkspaceStore.setState({
       hydrated: true,
       panels,

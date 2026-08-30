@@ -4,9 +4,10 @@ import type { ProviderId } from "../core/providers/contracts";
 export type DiagnosticStage =
   | "frame-ready"
   | "command-start"
-  | "prepare-confirmed"
-  | "write-confirmed"
-  | "submit-confirmed"
+  | "precheck-confirmed"
+  | "stage-confirmed"
+  | "commit-confirmed"
+  | "rollback-confirmed"
   | "response-update"
   | "new-session-confirmed"
   | "command-failed";
@@ -15,7 +16,7 @@ interface DiagnosticRecord {
   readonly providerId: ProviderId;
   readonly panelId: string;
   readonly stage: DiagnosticStage;
-  readonly operation?: "prepare" | "submit" | "new-session" | "response";
+  readonly operation?: "precheck" | "stage" | "commit" | "rollback" | "new-session" | "response";
   readonly promptLength?: number;
   readonly durationMs?: number;
   readonly composer?: string;

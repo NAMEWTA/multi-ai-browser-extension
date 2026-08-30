@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   frameStatusSchema,
-  preparePromptSchema,
+  precheckPromptSchema,
+  providerCommandSchema,
+  providerUrlUpdateSchema,
   providerDiagnosticSchema,
   runtimeMessageSchema,
   workspaceSubmitSchema,
@@ -14,10 +16,10 @@ const target = {
 };
 
 describe("runtime message validation", () => {
-  it("uses explicit prepare and workspace submission messages", () => {
+  it("uses explicit transaction phases and workspace submission messages", () => {
     expect(
-      preparePromptSchema.safeParse({
-        type: "PREPARE_PROMPT",
+      precheckPromptSchema.safeParse({
+        type: "PRECHECK_PROMPT",
         panelId: "panel-1",
         sessionId: "session-1",
         turnId: "turn-1",
@@ -31,6 +33,28 @@ describe("runtime message validation", () => {
         turnId: "turn-1",
         prompt: "比较这个问题",
         targets: [target],
+      }).success,
+    ).toBe(true);
+    for (const type of ["STAGE_PROMPT", "COMMIT_PROMPT", "ROLLBACK_PROMPT"] as const) {
+      expect(
+        providerCommandSchema.safeParse({
+          type,
+          panelId: "panel-1",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          prompt: "比较这个问题",
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("accepts a provider's complete current URL without interpreting its path", () => {
+    expect(
+      providerUrlUpdateSchema.safeParse({
+        type: "PROVIDER_URL_UPDATE",
+        panelId: "panel-1",
+        providerId: "kimi",
+        url: "https://www.kimi.com/chat/1a053281-d112-8361-8000-0917232aa2ed?chat_enter_method=home",
       }).success,
     ).toBe(true);
   });
@@ -77,7 +101,7 @@ describe("runtime message validation", () => {
         panelId: "panel-1",
         providerId: "deepseek",
         stage: "command-failed",
-        operation: "submit",
+        operation: "commit",
         promptLength: 20,
         errorCode: "SUBMIT_MISSING",
       }).success,

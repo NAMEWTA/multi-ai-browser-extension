@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { browser } from "wxt/browser";
 import { providerIds, type ProviderId } from "../../core/providers/contracts";
+import { providerRegistry } from "../../core/providers/registry";
+import type { SessionWorkspaceSnapshot } from "../../db/database";
 
 export type PanelStatus =
   | "loading"
@@ -16,6 +18,7 @@ export type LayoutMode = "tiles" | "adaptive";
 export interface WorkspacePanel {
   id: string;
   providerId: ProviderId;
+  url: string;
   status: PanelStatus;
   revision: number;
   message?: string | undefined;
@@ -41,10 +44,12 @@ interface WorkspaceState extends Omit<
   addPanel(providerId: ProviderId): void;
   removePanel(panelId: string): void;
   setProviderOpen(providerId: ProviderId, open: boolean): void;
+  restoreSnapshot(snapshot: SessionWorkspaceSnapshot): void;
   movePanel(panelId: string, direction: -1 | 1): void;
   toggleTarget(panelId: string): void;
   setAllTargets(selected: boolean): void;
   refreshPanel(panelId: string): void;
+  setPanelUrl(panelId: string, url: string): void;
   setPanelStatus(panelId: string, status: PanelStatus, message?: string): void;
   setSidebarOpen(open: boolean): void;
   setLayoutMode(mode: LayoutMode): void;
@@ -52,7 +57,9 @@ interface WorkspaceState extends Omit<
 }
 
 const STORAGE_KEY = "workspace-v3";
-const initialPanels: WorkspacePanel[] = (["deepseek", "kimi"] as const).map(createPanel);
+const initialPanels: WorkspacePanel[] = (["deepseek", "kimi"] as const).map((providerId) =>
+  createPanel(providerId),
+);
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   panels: initialPanels,
@@ -71,6 +78,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       .map((panel) => ({
         id: panel.id,
         providerId: panel.providerId,
+        url: validProviderUrl(panel.providerId, panel.url)
+          ? panel.url
+          : providerRegistry.get(panel.providerId).definition.defaultUrl,
         status: panel.status,
         revision: panel.revision,
         ...(panel.message ? { message: panel.message } : {}),
@@ -96,7 +106,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       return;
     }
     set({ hydrated: true });
-    await persist(get());
+    await queuePersist(get());
   },
 
   addPanel(providerId) {
@@ -106,7 +116,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       panels: [...state.panels, panel],
       selectedTargetIds: [...state.selectedTargetIds, panel.id],
     }));
-    void persist(get());
+    void queuePersist(get());
   },
 
   removePanel(panelId) {
@@ -117,13 +127,35 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         Object.entries(state.tileRatios).filter(([id]) => id !== panelId),
       ),
     }));
-    void persist(get());
+    void queuePersist(get());
   },
 
   setProviderOpen(providerId, open) {
     const existing = get().panels.find((panel) => panel.providerId === providerId);
     if (open && !existing) get().addPanel(providerId);
     if (!open && existing) get().removePanel(existing.id);
+  },
+
+  restoreSnapshot(snapshot) {
+    const orderedPanels = snapshot.panels
+      .toSorted((left, right) => left.order - right.order)
+      .filter((panel) => validProviderUrl(panel.providerId, panel.url));
+    const panels = orderedPanels.map((panel) =>
+      createPanel(panel.providerId, panel.url, panel.panelId),
+    );
+    set({
+      panels,
+      selectedTargetIds: orderedPanels
+        .filter((panel) => panel.selected)
+        .map((panel) => panel.panelId),
+      layoutMode: snapshot.layoutMode,
+      tileRatios: Object.fromEntries(
+        orderedPanels
+          .filter((panel) => Number.isFinite(panel.widthRatio) && panel.widthRatio > 0)
+          .map((panel) => [panel.panelId, panel.widthRatio]),
+      ),
+    });
+    void queuePersist(get());
   },
 
   movePanel(panelId, direction) {
@@ -136,7 +168,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (panel) panels.splice(target, 0, panel);
       return { panels };
     });
-    void persist(get());
+    void queuePersist(get());
   },
 
   toggleTarget(panelId) {
@@ -147,14 +179,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           ? [...state.selectedTargetIds, panelId]
           : state.selectedTargetIds,
     }));
-    void persist(get());
+    void queuePersist(get());
   },
 
   setAllTargets(selected) {
     set((state) => ({
       selectedTargetIds: selected ? state.panels.map((panel) => panel.id) : [],
     }));
-    void persist(get());
+    void queuePersist(get());
   },
 
   refreshPanel(panelId) {
@@ -170,6 +202,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           : panel,
       ),
     }));
+  },
+
+  setPanelUrl(panelId, url) {
+    const panel = get().panels.find((item) => item.id === panelId);
+    if (!panel || panel.url === url || !validProviderUrl(panel.providerId, url)) return;
+    set((state) => ({
+      panels: state.panels.map((item) => (item.id === panelId ? { ...item, url } : item)),
+    }));
+    void queuePersist(get());
   },
 
   setPanelStatus(panelId, status, message) {
@@ -188,17 +229,17 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   setSidebarOpen(sidebarOpen) {
     set({ sidebarOpen });
-    void persist(get());
+    void queuePersist(get());
   },
 
   setLayoutMode(layoutMode) {
     set({ layoutMode });
-    void persist(get());
+    void queuePersist(get());
   },
 
   setTileRatios(tileRatios) {
     set({ tileRatios });
-    void persist(get());
+    void queuePersist(get());
   },
 }));
 
@@ -214,11 +255,39 @@ async function persist(state: PersistedWorkspace): Promise<void> {
   });
 }
 
-function createPanel(providerId: ProviderId): WorkspacePanel {
+let persistQueue = Promise.resolve();
+
+function queuePersist(state: PersistedWorkspace): Promise<void> {
+  const snapshot: PersistedWorkspace = {
+    panels: state.panels.map((panel) => ({ ...panel })),
+    selectedTargetIds: [...(state.selectedTargetIds ?? [])],
+    sidebarOpen: state.sidebarOpen,
+    layoutMode: state.layoutMode,
+    tileRatios: { ...state.tileRatios },
+  };
+  persistQueue = persistQueue.catch(() => undefined).then(() => persist(snapshot));
+  return persistQueue;
+}
+
+function createPanel(
+  providerId: ProviderId,
+  url = providerRegistry.get(providerId).definition.defaultUrl,
+  id: string = crypto.randomUUID(),
+): WorkspacePanel {
   return {
-    id: crypto.randomUUID(),
+    id,
     providerId,
+    url,
     status: "loading",
     revision: 0,
   };
+}
+
+function validProviderUrl(providerId: ProviderId, url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  try {
+    return providerRegistry.match(url)?.definition.id === providerId;
+  } catch {
+    return false;
+  }
 }
