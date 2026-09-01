@@ -120,12 +120,9 @@ export default defineContentScript({
         reportResponse(command, update, captureId, ++revision);
       try {
         await report({ status: "waiting" });
-        const final = await strategy.captureResponse(
-          { ...ctx, signal },
-          baseline,
-          (update) => report(update),
-          { text: command.prompt },
-        );
+        const final = await strategy.captureResponse({ ...ctx, signal }, baseline, {
+          text: command.prompt,
+        });
         await report(final);
       } catch (error) {
         const normalized = normalizeProviderError(error);

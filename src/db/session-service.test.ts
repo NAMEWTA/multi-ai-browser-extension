@@ -20,6 +20,17 @@ const targets = [
   { panelId: "panel-k", providerId: "kimi" as const, providerName: "Kimi" },
 ];
 
+function nativeMetadata(captureId: string, revision = 1) {
+  return {
+    captureId,
+    revision,
+    observedAt: `2026-09-01T08:00:${revision.toString().padStart(2, "0")}.000Z`,
+    terminalReason: "completed" as const,
+    captureSource: "native-copy" as const,
+    nativeMimeType: "text/markdown" as const,
+  };
+}
+
 function sessionFixture(id: string, createdAt: string): SessionRecord {
   return {
     id,
@@ -50,8 +61,24 @@ describe("session history", () => {
       targets,
       targets.map((target) => ({ panelId: target.panelId, status: "submitted" })),
     );
-    await applyResponseUpdate(first.id, "panel-ds", "completed", "DeepSeek A");
-    await applyResponseUpdate(first.id, "panel-k", "completed", "Kimi A");
+    await applyResponseUpdate(
+      first.id,
+      "panel-ds",
+      "completed",
+      "DeepSeek A",
+      undefined,
+      undefined,
+      nativeMetadata("capture-ds"),
+    );
+    await applyResponseUpdate(
+      first.id,
+      "panel-k",
+      "completed",
+      "Kimi A",
+      undefined,
+      undefined,
+      nativeMetadata("capture-k"),
+    );
 
     const sameSession = (await getActiveSession())!;
     const second = await recordSuccessfulTurn(
@@ -159,7 +186,15 @@ describe("session history", () => {
       [],
       "stable-turn",
     );
-    await applyResponseUpdate(turn.id, "panel-ds", "completed", "完成");
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "completed",
+      "完成",
+      undefined,
+      undefined,
+      nativeMetadata("capture-order"),
+    );
 
     expect((await listSessions()).map((session) => session.id)).toEqual(expected);
     expect((await db.sessions.get("old"))?.lastOpenedAt).not.toBe("2026-08-01T00:00:00.000Z");
@@ -219,6 +254,12 @@ describe("session history", () => {
         {
           panelId: "panel-ds",
           status: "completed",
+          captureId: "capture-buffered-early",
+          revision: 1,
+          observedAt: "2026-09-01T08:00:01.000Z",
+          terminalReason: "completed",
+          captureSource: "native-copy",
+          nativeMimeType: "text/plain",
           responseText: "提前到达的回复",
         },
       ],
@@ -251,9 +292,40 @@ describe("session history", () => {
       targets,
       targets.map((target) => ({ panelId: target.panelId, status: "submitted" })),
     );
-    await applyResponseUpdate(turn.id, "panel-ds", "completed", "有效回复");
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "completed",
+      "有效回复",
+      undefined,
+      undefined,
+      nativeMetadata("capture-partial"),
+    );
     await applyResponseUpdate(turn.id, "panel-k", "timeout", undefined, "等待超时");
     expect((await getSessionDetail(session.id))?.turns[0]?.turn.status).toBe("partial");
+  });
+
+  it("rejects response bodies that did not come from a terminal native Copy", async () => {
+    const session = await createSession("拒绝 DOM 正文");
+    const turn = await recordSuccessfulTurn(
+      session.id,
+      "拒绝 DOM 正文",
+      [targets[0]!],
+      [{ panelId: "panel-ds", status: "submitted" }],
+    );
+
+    await expect(
+      applyResponseUpdate(turn.id, "panel-ds", "completed", "DOM fragment", undefined, undefined, {
+        captureId: "capture-dom",
+        revision: 1,
+        observedAt: "2026-09-01T08:00:00.000Z",
+        terminalReason: "completed",
+        captureSource: "dom",
+      }),
+    ).rejects.toThrow("终态原生 Copy");
+    expect(
+      (await getSessionDetail(session.id))?.turns[0]?.exchanges[0]?.responseText,
+    ).toBeUndefined();
   });
 
   it("keeps a completed revision when stale or nonterminal updates arrive later", async () => {
@@ -270,15 +342,17 @@ describe("session history", () => {
       revision,
       observedAt,
       ...(terminalReason ? { terminalReason } : {}),
+      captureSource: "native-copy" as const,
+      nativeMimeType: "text/markdown" as const,
     });
 
     await applyResponseUpdate(
       turn.id,
       "panel-ds",
       "streaming",
-      "# 你好",
       undefined,
-      "# 你好",
+      undefined,
+      undefined,
       metadata(7),
     );
     await applyResponseUpdate(
@@ -294,18 +368,18 @@ describe("session history", () => {
       turn.id,
       "panel-ds",
       "streaming",
-      "# 你好",
       undefined,
-      "# 你好",
+      undefined,
+      undefined,
       metadata(7),
     );
     await applyResponseUpdate(
       turn.id,
       "panel-ds",
       "streaming",
-      "错误的后续流",
       undefined,
-      "错误的后续流",
+      undefined,
+      undefined,
       metadata(9),
     );
     await applyResponseUpdate(turn.id, "panel-ds", "completed", "另一采集", undefined, "另一采集", {
@@ -339,6 +413,8 @@ describe("session history", () => {
           revision: 8,
           observedAt: "2026-09-01T08:00:08.000Z",
           terminalReason: "completed",
+          captureSource: "native-copy",
+          nativeMimeType: "text/markdown",
           responseText: "完整缓冲回答",
           responseMarkdown: "## 完整缓冲回答",
         },
@@ -348,8 +424,6 @@ describe("session history", () => {
           captureId: "capture-buffered",
           revision: 7,
           observedAt: "2026-09-01T08:00:07.000Z",
-          responseText: "# 你好",
-          responseMarkdown: "# 你好",
         },
       ],
     );

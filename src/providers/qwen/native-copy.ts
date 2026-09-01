@@ -14,7 +14,7 @@ let nextAnonymousTurnKey = 1;
 
 export const qwenNativeCopyAdapter: NativeCopyAdapter = {
   id: "qwen-native-copy",
-  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: false },
+  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: true, terminalStableMs: 1_500 },
 
   locateCopyButton(_ctx, response) {
     const turn = closestMatching(response, qwenNativeCopySelectors.turn) ?? response;

@@ -7,7 +7,7 @@ let nextAnonymousTurnKey = 1;
 
 export const kimiNativeCopyAdapter: NativeCopyAdapter = {
   id: "kimi-native-copy",
-  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: false },
+  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: true, terminalStableMs: 1_500 },
 
   locateCopyButton(_ctx, response) {
     const turn = closestMatching(response, kimiNativeCopySelectors.turn) ?? response;

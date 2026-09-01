@@ -44,14 +44,6 @@ export class QwenStrategy extends BaseDomStrategy {
     return responseId ? `qwen-response:${responseId}` : super.responseKey(element, index);
   }
 
-  protected override isResponseGenerating(document: Document, response: HTMLElement): boolean {
-    const receiving = response
-      .closest<HTMLElement>(".chat-round[data-chat]")
-      ?.querySelector<HTMLElement>(".answer-receiving-card");
-    if (receiving && isElementVisible(receiving)) return true;
-    return super.isResponseGenerating(document, response);
-  }
-
   protected override findBlocked(document: Document): HTMLElement | undefined {
     for (const selector of qwenSelectors.blocked) {
       for (const candidate of document.querySelectorAll(selector)) {

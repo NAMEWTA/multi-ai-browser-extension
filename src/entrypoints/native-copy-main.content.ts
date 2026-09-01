@@ -9,10 +9,13 @@ import {
 
 const INSTALLATION_KEY = Symbol.for("multi-ai-browser-extension.native-copy-main.v1");
 const SUPPORTED_MIME_TYPES = ["text/markdown", "text/plain", "text/html"] as const;
+const CAPTURE_SETTLE_MS = 75;
 
 interface ArmedCapture {
   readonly token: string;
   readonly suppressSystemClipboard: boolean;
+  candidate?: NativeCopyPayload;
+  settleTimeout?: number;
 }
 
 interface MainBridgeInstallation {
@@ -33,7 +36,7 @@ export function installNativeCopyMainBridge(targetWindow: Window = window): () =
     if (typeof originalWriteText === "function") {
       const patchedWriteText = function (this: Clipboard, text: string): Promise<void> {
         const capture = active;
-        if (capture) settleCaptured(capture, { text: String(text), mimeType: "text/plain" });
+        if (capture) stageCaptured(capture, { text: String(text), mimeType: "text/plain" });
         if (capture?.suppressSystemClipboard) return Promise.resolve();
         return originalWriteText.call(this, text);
       };
@@ -47,7 +50,7 @@ export function installNativeCopyMainBridge(targetWindow: Window = window): () =
         const capture = active;
         if (capture) {
           void readClipboardItems(items).then(
-            (payload) => settleCaptured(capture, payload),
+            (payload) => stageCaptured(capture, payload),
             (error: unknown) => settleError(capture, errorMessage(error)),
           );
         }
@@ -95,12 +98,27 @@ export function installNativeCopyMainBridge(targetWindow: Window = window): () =
     dispatchNativeCopyResponse(targetWindow, { type: "armed", token: message.token });
   };
 
-  const settleCaptured = (capture: ArmedCapture, payload: NativeCopyPayload): void => {
+  const stageCaptured = (capture: ArmedCapture, payload: NativeCopyPayload): void => {
     if (active?.token !== capture.token) return;
     if (payload.text.length > MAX_NATIVE_COPY_TEXT_LENGTH) {
       settleError(capture, "Native copy payload exceeds the supported size");
       return;
     }
+    if (!capture.candidate || comparePayload(payload, capture.candidate) > 0) {
+      capture.candidate = payload;
+    }
+    if (capture.settleTimeout !== undefined) {
+      targetWindow.clearTimeout(capture.settleTimeout);
+    }
+    capture.settleTimeout = targetWindow.setTimeout(
+      () => settleCaptured(capture),
+      CAPTURE_SETTLE_MS,
+    );
+  };
+
+  const settleCaptured = (capture: ArmedCapture): void => {
+    if (active?.token !== capture.token || !capture.candidate) return;
+    const payload = capture.candidate;
     clearActive();
     dispatchNativeCopyResponse(targetWindow, { type: "captured", token: capture.token, payload });
   };
@@ -112,6 +130,7 @@ export function installNativeCopyMainBridge(targetWindow: Window = window): () =
   };
 
   const clearActive = (): void => {
+    if (active?.settleTimeout !== undefined) targetWindow.clearTimeout(active.settleTimeout);
     active = undefined;
     if (activeTimeout !== undefined) targetWindow.clearTimeout(activeTimeout);
     activeTimeout = undefined;
@@ -128,6 +147,16 @@ export function installNativeCopyMainBridge(targetWindow: Window = window): () =
   };
   scope[INSTALLATION_KEY] = installation;
   return () => installation.uninstall();
+}
+
+function comparePayload(left: NativeCopyPayload, right: NativeCopyPayload): number {
+  const length = left.text.trim().length - right.text.trim().length;
+  if (length !== 0) return length;
+  return mimePriority(left.mimeType) - mimePriority(right.mimeType);
+}
+
+function mimePriority(mimeType: NativeCopyPayload["mimeType"]): number {
+  return mimeType === "text/markdown" ? 3 : mimeType === "text/plain" ? 2 : 1;
 }
 
 async function readClipboardItems(items: ClipboardItems): Promise<NativeCopyPayload> {

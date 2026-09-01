@@ -88,7 +88,14 @@ describe("turn prompt metadata and Markdown responses", () => {
         ],
       },
     );
-    await applyResponseUpdate(turn.id, "panel-qwen", "completed", "OK", undefined, "**OK**");
+    await applyResponseUpdate(turn.id, "panel-qwen", "completed", "OK", undefined, "**OK**", {
+      captureId: "capture-export",
+      revision: 1,
+      observedAt: "2026-09-01T08:00:00.000Z",
+      terminalReason: "completed",
+      captureSource: "native-copy",
+      nativeMimeType: "text/markdown",
+    });
 
     const jsonl = await exportHistoryJsonl();
     await Promise.all([db.sessions.clear(), db.turns.clear(), db.exchanges.clear()]);

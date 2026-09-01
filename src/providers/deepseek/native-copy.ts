@@ -68,7 +68,7 @@ let nextAnonymousTurnKey = 1;
 
 export const deepseekNativeCopyAdapter: NativeCopyAdapter = {
   id: "deepseek-native-copy",
-  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: false },
+  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: true, terminalStableMs: 1_500 },
 
   locateCopyButton(_ctx, response) {
     const turn = findTurn(response);

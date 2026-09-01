@@ -70,6 +70,7 @@ export async function captureNativeTarget(
           domMarkdown: snapshot?.markdown ?? "",
           ...(prompt?.text ? { prompt: prompt.text } : {}),
         }) ?? captured;
+      if (prompt?.text && searchable(payload.text) === searchable(prompt.text)) continue;
       const validated = validateNativeCopy(
         payload,
         snapshot,
@@ -101,6 +102,7 @@ export function validateNativeCopy(
 ): { text: string; markdown: string } | undefined {
   const value = normalize(payload.text);
   if (!value) return undefined;
+  if (isCopyConfirmation(value)) return undefined;
   const domText = normalize(snapshot?.text ?? "");
   const domMarkdown = normalize(snapshot?.markdown ?? "");
   const nativeText = plainText(value, payload.mimeType, document);
@@ -180,4 +182,8 @@ function containsEndingAnchor(nativeText: string, domText: string): boolean {
 
 function searchable(value: string): string {
   return value.toLocaleLowerCase().replace(/[\s#*_`>(){}~|\\-]+/g, "");
+}
+
+function isCopyConfirmation(value: string): boolean {
+  return /^(copied|copy successful|copied to clipboard|已复制|复制成功)[.!。！]?$/i.test(value);
 }

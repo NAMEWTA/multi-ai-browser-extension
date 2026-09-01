@@ -22,7 +22,7 @@ let nextAnonymousTurnKey = 1;
 
 export const doubaoNativeCopyAdapter: NativeCopyAdapter = {
   id: "doubao-native-copy",
-  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: false },
+  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: true, terminalStableMs: 3_000 },
 
   locateCopyButton(_ctx, response) {
     const turn = closestMatching(response, doubaoNativeCopySelectors.turn) ?? response;
@@ -119,8 +119,15 @@ function selectTargetNearPrompt(
 }
 
 function turnKey(turn: HTMLElement): string {
+  const identity = turn.matches(
+    "[data-message-id], [data-local-message-id], [data-msg-id], [data-id]",
+  )
+    ? turn
+    : turn.querySelector<HTMLElement>(
+        "[data-message-id], [data-local-message-id], [data-msg-id], [data-id]",
+      );
   for (const attribute of ["data-message-id", "data-local-message-id", "data-msg-id", "data-id"]) {
-    const value = turn.getAttribute(attribute)?.trim();
+    const value = identity?.getAttribute(attribute)?.trim();
     if (value) return `doubao-copy:${value}`;
   }
   const existing = anonymousTurnKeys.get(turn);

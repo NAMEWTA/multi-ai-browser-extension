@@ -88,15 +88,20 @@ describe("DeepSeekStrategy", () => {
         `,
       );
       const strategy = new DeepSeekStrategy();
-      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 30_000 };
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## 最终回答\n\n这是正文。",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 30_000 };
       const baseline = await strategy.prepareSubmit(ctx);
       expect(baseline).toMatchObject({
         keys: ["deepseek-turn:old-turn"],
         lastKey: "deepseek-turn:old-turn",
         lastText: "旧回复",
       });
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const capture = strategy.captureResponse(ctx, baseline);
       const control = document.querySelector<HTMLElement>("div[role='button']")!;
       control.classList.remove("ds-button--disabled");
 
@@ -105,29 +110,22 @@ describe("DeepSeekStrategy", () => {
       const thinkingTurn = thinkingTemplate.content.firstElementChild as HTMLElement;
       document.body.append(thinkingTurn);
       await vi.advanceTimersByTimeAsync(13_000);
-      expect(updates).not.toHaveBeenCalled();
 
       const finalTemplate = document.createElement("template");
       finalTemplate.innerHTML = fixture("final-turn.html");
       const finalTurn = finalTemplate.content.firstElementChild as HTMLElement;
       thinkingTurn.replaceWith(finalTurn);
-      await Promise.resolve();
       await vi.advanceTimersByTimeAsync(1);
-      expect(updates).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "streaming",
-          text: expect.stringContaining("最终回答"),
-          markdown: expect.stringContaining("## 最终回答"),
-        }),
-      );
 
       control.classList.add("ds-button--disabled");
-      await vi.advanceTimersByTimeAsync(12_300);
+      await vi.advanceTimersByTimeAsync(1_600);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
+        captureSource: "native-copy",
         text: expect.stringContaining("最终回答"),
         markdown: expect.not.stringContaining("搜索计划"),
       });
+      expect(nativeCopy.capture).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -137,17 +135,22 @@ describe("DeepSeekStrategy", () => {
     vi.useFakeTimers();
     try {
       const strategy = new DeepSeekStrategy();
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "# 你好\n\n哈哈，我正在全力以赴地陪你聊天呢！\n\n1. 接收并读懂你的问题\n2. 组织完整回答\n3. 继续等待你的问题",
+          mimeType: "text/markdown" as const,
+        }),
+      };
       const baseline = await strategy.prepareSubmit({
         document,
         window,
+        nativeCopy,
         timeoutMs: 100,
         responseTimeoutMs: 30_000,
       });
-      const updates = vi.fn();
       const capture = strategy.captureResponse(
-        { document, window, responseTimeoutMs: 30_000 },
+        { document, window, nativeCopy, responseTimeoutMs: 30_000 },
         baseline,
-        updates,
       );
       const control = document.querySelector<HTMLElement>("div[role='button']")!;
       control.classList.remove("ds-button--disabled");
@@ -159,18 +162,15 @@ describe("DeepSeekStrategy", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       control.classList.add("ds-button--disabled");
-      await vi.advanceTimersByTimeAsync(12_500);
+      await vi.advanceTimersByTimeAsync(1_600);
 
       await expect(capture).resolves.toMatchObject({
-        status: "partial",
-        terminalReason: "interrupted",
+        status: "completed",
+        terminalReason: "completed",
+        captureSource: "native-copy",
         text: expect.stringContaining("继续等待你的问题"),
         markdown: expect.stringContaining("继续等待你的问题"),
       });
-      const finalUpdate = updates.mock.calls.at(-1)?.[0];
-      expect(finalUpdate.markdown).toContain("哈哈，我正在全力以赴地陪你聊天呢！");
-      expect(finalUpdate.markdown).not.toContain("内部推理");
-      expect(finalUpdate.markdown).not.toContain("已停止");
     } finally {
       vi.useRealTimers();
     }

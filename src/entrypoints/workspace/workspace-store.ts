@@ -56,9 +56,10 @@ interface WorkspaceState extends Omit<
   setTileRatios(ratios: Record<string, number>): void;
 }
 
-const STORAGE_KEY = "workspace-v3";
-const initialPanels: WorkspacePanel[] = (["deepseek", "kimi"] as const).map((providerId) =>
-  createPanel(providerId),
+const STORAGE_KEY = "workspace-v4";
+const LEGACY_STORAGE_KEY = "workspace-v3";
+const initialPanels: WorkspacePanel[] = (["deepseek", "doubao", "qwen"] as const).map(
+  (providerId) => createPanel(providerId),
 );
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -70,8 +71,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   hydrated: false,
 
   async hydrate() {
-    const result = await browser.storage.local.get(STORAGE_KEY);
-    const persisted = result[STORAGE_KEY] as PersistedWorkspace | undefined;
+    const result = await browser.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY]);
+    const current = result[STORAGE_KEY] as PersistedWorkspace | undefined;
+    const legacy = result[LEGACY_STORAGE_KEY] as PersistedWorkspace | undefined;
+    const persisted = current ?? migrateLegacyWorkspace(legacy);
     const persistedPanels = persisted?.panels ?? [];
     const panels = persistedPanels
       .filter((panel) => providerIds.includes(panel.providerId))
@@ -103,6 +106,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         tileRatios: persisted?.tileRatios ?? {},
         hydrated: true,
       });
+      if (!current) await queuePersist(get());
       return;
     }
     set({ hydrated: true });
@@ -290,4 +294,31 @@ function validProviderUrl(providerId: ProviderId, url: unknown): url is string {
   } catch {
     return false;
   }
+}
+
+function migrateLegacyWorkspace(
+  workspace: PersistedWorkspace | undefined,
+): PersistedWorkspace | undefined {
+  if (!workspace) return undefined;
+  const providerOrder = workspace.panels.map((panel) => panel.providerId);
+  const allSelected = Array.isArray(workspace.selectedTargetIds)
+    ? workspace.selectedTargetIds.length === workspace.panels.length &&
+      workspace.panels.every((panel) => workspace.selectedTargetIds?.includes(panel.id))
+    : workspace.panels.every((panel) => panel.enabled !== false);
+  const legacyDefault =
+    providerOrder.length === 2 &&
+    providerOrder[0] === "deepseek" &&
+    providerOrder[1] === "kimi" &&
+    allSelected;
+  if (!legacyDefault) return workspace;
+  const panels = (["deepseek", "doubao", "qwen"] as const).map((providerId) =>
+    createPanel(providerId),
+  );
+  return {
+    panels,
+    selectedTargetIds: panels.map((panel) => panel.id),
+    sidebarOpen: workspace.sidebarOpen,
+    layoutMode: workspace.layoutMode,
+    tileRatios: {},
+  };
 }

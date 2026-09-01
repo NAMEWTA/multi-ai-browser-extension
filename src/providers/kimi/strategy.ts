@@ -1,7 +1,6 @@
 import { BaseDomStrategy } from "../../core/providers/base-dom-strategy";
 import type { FrameContext, PromptPayload } from "../../core/providers/contracts";
 import {
-  isElementVisible,
   normalizeComposerValue,
   readComposerValue,
   waitForCondition,
@@ -83,13 +82,5 @@ export class KimiStrategy extends BaseDomStrategy {
       }
     }
     return super.responseKey(element, index);
-  }
-
-  protected override isResponseGenerating(document: Document, response: HTMLElement): boolean {
-    const scopedSignals = response.querySelectorAll(
-      "[aria-busy='true'], [data-state='loading'], [class*='loading'], [class*='typing']",
-    );
-    if ([...scopedSignals].some((element) => isElementVisible(element))) return true;
-    return super.isResponseGenerating(document, response);
   }
 }

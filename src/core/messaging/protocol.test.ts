@@ -107,6 +107,8 @@ describe("runtime message validation", () => {
       observedAt: "2026-09-01T08:00:08.000Z",
       status: "completed",
       terminalReason: "completed",
+      captureSource: "native-copy",
+      nativeMimeType: "text/markdown",
       text: "完整回答",
       markdown: "## 完整回答",
     };
@@ -114,6 +116,32 @@ describe("runtime message validation", () => {
     expect(providerResponseUpdateSchema.safeParse({ ...update, revision: 0 }).success).toBe(false);
     expect(
       providerResponseUpdateSchema.safeParse({ ...update, captureId: undefined }).success,
+    ).toBe(false);
+  });
+
+  it("rejects streaming or DOM-sourced response bodies", () => {
+    const terminal = {
+      type: "PROVIDER_RESPONSE_UPDATE",
+      panelId: "panel-1",
+      providerId: "deepseek",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      captureId: "capture-1",
+      revision: 1,
+      observedAt: "2026-09-01T08:00:00.000Z",
+      status: "completed",
+      terminalReason: "completed",
+      captureSource: "native-copy",
+      nativeMimeType: "text/plain",
+      text: "complete response",
+    };
+
+    expect(providerResponseUpdateSchema.safeParse(terminal).success).toBe(true);
+    expect(
+      providerResponseUpdateSchema.safeParse({ ...terminal, status: "streaming" }).success,
+    ).toBe(false);
+    expect(
+      providerResponseUpdateSchema.safeParse({ ...terminal, captureSource: "dom" }).success,
     ).toBe(false);
   });
 

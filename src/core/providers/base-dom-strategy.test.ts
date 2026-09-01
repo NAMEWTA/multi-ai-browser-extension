@@ -28,51 +28,10 @@ class TestStrategy extends BaseDomStrategy {
   }
 }
 
-class PlannedCaptureStrategy extends BaseDomStrategy {
-  constructor() {
-    super(definition, {
-      composer: ["#composer"],
-      submit: ["#send"],
-      responses: [".turn"],
-      responseQuietMs: 100,
-      responsePollMs: 20,
-      responseCapture: {
-        turnTiers: [{ id: "turn", confidence: "canonical", selectors: [".turn"] }],
-        finalContainers: [".final"],
-        contentBlocks: [".block"],
-        allowStableCompletionWithoutGenerating: true,
-      },
-    });
-  }
-}
-
-class NativePlannedCaptureStrategy extends BaseDomStrategy {
-  protected override readonly nativeCopyAdapter = {
-    id: "test-native-copy",
-    locateCopyButton: (_ctx: unknown, response: HTMLElement) =>
-      response.querySelector<HTMLElement>(".copy") ?? undefined,
-  };
-
-  constructor() {
-    super(definition, {
-      composer: ["#composer"],
-      submit: ["#send"],
-      responses: [".turn"],
-      generating: [".stop"],
-      responseQuietMs: 5_000,
-      responsePollMs: 20,
-      responseCapture: {
-        turnTiers: [{ id: "turn", confidence: "canonical", selectors: [".turn"] }],
-        finalContainers: [".final"],
-      },
-    });
-  }
-}
-
 class NativeTargetOnlyStrategy extends BaseDomStrategy {
   protected override readonly nativeCopyAdapter = {
     id: "test-target-only-native-copy",
-    capturePolicy: { maxAttempts: 2, requireDomEndingAnchor: false },
+    capturePolicy: { maxAttempts: 2, requireDomEndingAnchor: false, terminalStableMs: 250 },
     locateCopyButton: (_ctx: unknown, response: HTMLElement) =>
       response.querySelector<HTMLElement>(".copy") ?? undefined,
     listTargets: (ctx: { document: Document }) =>
@@ -87,6 +46,7 @@ class NativeTargetOnlyStrategy extends BaseDomStrategy {
     super(definition, {
       composer: ["#composer"],
       submit: ["#send"],
+      blocked: ["#verification"],
       responses: [".selector-that-does-not-match-the-copy-turn"],
       responsePollMs: 20,
     });
@@ -256,451 +216,176 @@ describe("BaseDomStrategy", () => {
     expect(click).not.toHaveBeenCalled();
   });
 
-  it("captures a new stable assistant response as text and Markdown", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML =
-        '<textarea id="composer"></textarea><button id="send">send</button>';
-      const strategy = new TestStrategy();
-      const ctx = { document, window, responseTimeoutMs: 3_000 };
-      const baseline = await strategy.prepareSubmit(ctx);
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(ctx, baseline, updates);
-      const response = document.createElement("div");
-      response.className = "assistant-response";
-      response.textContent = "最终回复";
-      document.body.append(response);
-      await vi.advanceTimersByTimeAsync(2_250);
-      await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        terminalReason: "completed",
-        text: "最终回复",
-        markdown: "最终回复",
-      });
-      expect(updates).toHaveBeenCalledWith({
-        status: "streaming",
-        text: "最终回复",
-        markdown: "最终回复",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+  it("requires a provider native Copy adapter for response bodies", async () => {
+    const result = await new TestStrategy().captureResponse(
+      { document, window },
+      { count: 0, lastText: "" },
+    );
+
+    expect(result).toEqual({
+      status: "unsupported",
+      terminalReason: "unsupported",
+      message: "当前站点未提供原生 Copy 回复采集能力",
+    });
   });
 
-  it("does not complete a title-only block before a canonical final container appears", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = `
-        <div class="turn" data-message-id="current">
-          <div class="block"><h1>你好</h1></div>
-        </div>
-      `;
-      const strategy = new PlannedCaptureStrategy();
-      const capture = strategy.captureResponse(
-        { document, window, responseTimeoutMs: 1_000 },
-        { count: 0, lastText: "" },
-        vi.fn(),
-      );
-
-      await vi.advanceTimersByTimeAsync(400);
-      let settled = false;
-      void capture.finally(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-
-      document.querySelector(".turn")!.innerHTML = `
-        <div class="final">
-          <div class="block"><h1>你好</h1></div>
-          <p>这是完整正文。</p>
-        </div>
-      `;
-      await vi.advanceTimersByTimeAsync(400);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        terminalReason: "completed",
-        text: expect.stringContaining("这是完整正文"),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("finalizes promptly when generation stopped and the native answer copy is ready", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = `
-        <button class="stop">stop</button>
-        <div class="turn" data-message-id="current">
-          <div class="final">Complete DOM answer</div>
-          <button class="copy">copy</button>
-        </div>
-      `;
-      const nativeCopy = {
-        capture: vi.fn().mockResolvedValue({
-          text: "# Complete native answer",
-          mimeType: "text/markdown",
-        }),
-      };
-      const capture = new NativePlannedCaptureStrategy().captureResponse(
-        { document, window, nativeCopy, responseTimeoutMs: 10_000 },
-        { count: 0, lastText: "" },
-        vi.fn(),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      document.querySelector(".stop")?.remove();
-      await vi.advanceTimersByTimeAsync(1_100);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        captureSource: "native-copy",
-        markdown: "# Complete native answer",
-      });
-      expect(nativeCopy.capture).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("captures a terminal native-copy target when no response content selector matches", async () => {
+  it("waits for a stable terminal target and returns only the native Copy payload", async () => {
     vi.useFakeTimers();
     try {
       document.body.innerHTML = '<textarea id="composer"></textarea><button id="send"></button>';
       const strategy = new NativeTargetOnlyStrategy();
       const nativeCopy = {
         capture: vi.fn().mockResolvedValue({
-          text: "# Full provider answer\n\nEnding from the official copy action.",
+          text: "# Complete provider answer\n\nFinal paragraph.",
           mimeType: "text/markdown" as const,
         }),
       };
       const ctx = { document, window, nativeCopy, responseTimeoutMs: 3_000 };
       const baseline = await strategy.prepareSubmit(ctx);
-      const capture = strategy.captureResponse(ctx, baseline, vi.fn(), { text: "current prompt" });
-
+      const capture = strategy.captureResponse(ctx, baseline, { text: "prompt" });
       document.body.insertAdjacentHTML(
         "beforeend",
-        '<article class="copy-turn" data-turn-id="current"><button class="copy">copy</button></article>',
+        '<article class="copy-turn" data-turn-id="current"><p>Final paragraph.</p><button class="copy">copy</button></article>',
       );
-      await vi.advanceTimersByTimeAsync(300);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(nativeCopy.capture).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
 
       await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        captureSource: "native-copy",
-        markdown: expect.stringContaining("official copy action"),
-      });
-      expect(nativeCopy.capture).toHaveBeenCalledWith(
-        expect.objectContaining({
-          button: document.querySelector(".copy-turn .copy"),
-          suppressSystemClipboard: true,
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rebinds a native-copy target that React replaces during the first capture attempt", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = '<textarea id="composer"></textarea><button id="send"></button>';
-      const strategy = new NativeTargetOnlyStrategy();
-      const nativeCopy = {
-        capture: vi
-          .fn()
-          .mockImplementationOnce(async () => {
-            document.querySelector(".copy-turn")?.remove();
-            document.body.insertAdjacentHTML(
-              "beforeend",
-              '<article class="copy-turn" data-turn-id="current"><button class="copy">replacement</button></article>',
-            );
-            throw new Error("target replaced");
-          })
-          .mockResolvedValueOnce({
-            text: "Complete answer from the rebound target",
-            mimeType: "text/plain" as const,
-          }),
-      };
-      const ctx = { document, window, nativeCopy, responseTimeoutMs: 3_000 };
-      const baseline = await strategy.prepareSubmit(ctx);
-      const capture = strategy.captureResponse(ctx, baseline, vi.fn());
-      document.body.insertAdjacentHTML(
-        "beforeend",
-        '<article class="copy-turn" data-turn-id="current"><button class="copy">first</button></article>',
-      );
-
-      await vi.advanceTimersByTimeAsync(700);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        captureSource: "native-copy",
-        text: "Complete answer from the rebound target",
-      });
-      expect(nativeCopy.capture).toHaveBeenCalledTimes(2);
-      expect(nativeCopy.capture).toHaveBeenLastCalledWith(
-        expect.objectContaining({ button: document.querySelector(".copy-turn .copy") }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("never reclassifies a mutated baseline response as the current answer", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = `
-        <textarea id="composer"></textarea>
-        <div class="assistant-response">Old answer with a temporary capacity banner</div>
-      `;
-      const strategy = new TestStrategy();
-      const baseline = await strategy.prepareSubmit({ document, window, timeoutMs: 10 });
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(
-        { document, window, responseTimeoutMs: 500 },
-        baseline,
-        updates,
-      );
-
-      document.querySelector<HTMLElement>(".assistant-response")!.textContent = "Old answer";
-      await vi.advanceTimersByTimeAsync(501);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "timeout",
-        terminalReason: "timeout",
-      });
-      expect(updates).not.toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("Old answer") }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("preserves a title-only block as uncertain partial at the deadline", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = `
-        <div class="turn" data-message-id="current">
-          <div class="block"><h1>你好</h1></div>
-        </div>
-      `;
-      const capture = new PlannedCaptureStrategy().captureResponse(
-        { document, window, responseTimeoutMs: 500 },
-        { count: 0, lastText: "" },
-        vi.fn(),
-      );
-
-      await vi.advanceTimersByTimeAsync(501);
-      await expect(capture).resolves.toMatchObject({
-        status: "partial",
-        terminalReason: "uncertain-final",
-        text: "你好",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("preserves captured content as partial when capture is aborted", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = '<textarea id="composer"></textarea>';
-      const controller = new AbortController();
-      const strategy = new TestStrategy();
-      const ctx = { document, window, signal: controller.signal, responseTimeoutMs: 3_000 };
-      const capture = strategy.captureResponse(ctx, { count: 0, lastText: "" }, vi.fn());
-      const response = document.createElement("div");
-      response.className = "assistant-response";
-      response.innerHTML = "<strong>部分回复</strong>";
-      document.body.append(response);
-      await vi.advanceTimersByTimeAsync(0);
-
-      controller.abort();
-
-      await expect(capture).resolves.toMatchObject({
-        status: "partial",
-        text: "部分回复",
-        markdown: "**部分回复**",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("uses a finalized rescue snapshot when the active capture is superseded", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = '<textarea id="composer"></textarea>';
-      const controller = new AbortController();
-      const capture = new TestStrategy().captureResponse(
-        { document, window, signal: controller.signal, responseTimeoutMs: 3_000 },
-        { count: 0, lastText: "" },
-        vi.fn(),
-      );
-      document.body.insertAdjacentHTML(
-        "beforeend",
-        '<div class="assistant-response">visible fallback</div>',
-      );
-      await vi.advanceTimersByTimeAsync(0);
-
-      controller.abort({
         status: "completed",
         terminalReason: "completed",
-        text: "complete native answer",
-        markdown: "**complete native answer**",
         captureSource: "native-copy",
         nativeMimeType: "text/markdown",
-      });
-
-      await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        text: "complete native answer",
-        captureSource: "native-copy",
+        markdown: expect.stringContaining("Final paragraph"),
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("preserves captured content as partial when the response deadline is reached", async () => {
+  it("resets terminal stability when the target content changes", async () => {
     vi.useFakeTimers();
     try {
-      document.body.innerHTML = '<textarea id="composer"></textarea>';
-      const strategy = new TestStrategy();
-      const ctx = { document, window, responseTimeoutMs: 500 };
-      const capture = strategy.captureResponse(ctx, { count: 0, lastText: "" }, vi.fn());
-      const response = document.createElement("div");
-      response.className = "assistant-response";
-      response.textContent = "超时前的回复";
-      document.body.append(response);
+      const strategy = new NativeTargetOnlyStrategy();
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "Complete answer ending",
+          mimeType: "text/plain" as const,
+        }),
+      };
+      const capture = strategy.captureResponse(
+        { document, window, nativeCopy, responseTimeoutMs: 2_000 },
+        { count: 0, lastText: "", nativeCopyTargets: [] },
+      );
+      document.body.innerHTML =
+        '<article class="copy-turn" data-turn-id="current"><p>draft</p><button class="copy">copy</button></article>';
+      await vi.advanceTimersByTimeAsync(200);
+      document.querySelector(".copy-turn p")!.textContent = "Complete answer ending";
+      await vi.advanceTimersByTimeAsync(249);
+      expect(nativeCopy.capture).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(52);
 
+      await expect(capture).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails without persisting visible DOM when native Copy is invalid", async () => {
+    vi.useFakeTimers();
+    try {
+      const strategy = new NativeTargetOnlyStrategy();
+      const nativeCopy = { capture: vi.fn().mockRejectedValue(new Error("no clipboard write")) };
+      const capture = strategy.captureResponse(
+        { document, window, nativeCopy, responseTimeoutMs: 2_000 },
+        { count: 0, lastText: "", nativeCopyTargets: [] },
+      );
+      document.body.innerHTML =
+        '<article class="copy-turn" data-turn-id="current"><p>Visible but untrusted DOM body</p><button class="copy">copy</button></article>';
+      await vi.advanceTimersByTimeAsync(300);
+
+      await expect(capture).resolves.toEqual({
+        status: "failed",
+        terminalReason: "failed",
+        message: "官网回复已结束，但从本轮原生 Copy 按钮取得的内容无效",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out without converting a DOM fragment into a partial reply", async () => {
+    vi.useFakeTimers();
+    try {
+      const capture = new NativeTargetOnlyStrategy().captureResponse(
+        {
+          document,
+          window,
+          nativeCopy: { capture: vi.fn() },
+          responseTimeoutMs: 500,
+        },
+        { count: 0, lastText: "", nativeCopyTargets: [] },
+      );
+      document.body.innerHTML = '<div class="assistant-response">Visible fragment</div>';
       await vi.advanceTimersByTimeAsync(501);
 
-      await expect(capture).resolves.toMatchObject({
-        status: "partial",
-        text: "超时前的回复",
-        markdown: "超时前的回复",
+      await expect(capture).resolves.toEqual({
+        status: "timeout",
+        terminalReason: "timeout",
+        message: "等待本轮回复的原生 Copy 按钮进入稳定终态超时",
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("stops capture when a verification challenge appears and preserves visible content", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = '<textarea id="composer"></textarea>';
-      const strategy = new TestStrategy();
-      const capture = strategy.captureResponse(
-        { document, window, responseTimeoutMs: 3_000 },
-        { count: 0, lastText: "" },
-        vi.fn(),
-      );
-      const response = document.createElement("div");
-      response.className = "assistant-response";
-      response.textContent = "验证前回复";
-      document.body.append(response);
-      await vi.advanceTimersByTimeAsync(0);
+  it("uses a finalized native rescue when a capture is superseded", async () => {
+    const controller = new AbortController();
+    const capture = new NativeTargetOnlyStrategy().captureResponse(
+      {
+        document,
+        window,
+        nativeCopy: { capture: vi.fn() },
+        signal: controller.signal,
+        responseTimeoutMs: 3_000,
+      },
+      { count: 0, lastText: "", nativeCopyTargets: [] },
+    );
+    controller.abort({
+      status: "completed",
+      terminalReason: "completed",
+      text: "complete native answer",
+      markdown: "**complete native answer**",
+      captureSource: "native-copy",
+      nativeMimeType: "text/markdown",
+    });
 
-      const verification = document.createElement("div");
-      verification.id = "verification";
-      document.body.append(verification);
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "partial",
-        text: "验证前回复",
-        markdown: "验证前回复",
-        message: expect.stringContaining("人工验证"),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(capture).resolves.toMatchObject({
+      status: "completed",
+      text: "complete native answer",
+      captureSource: "native-copy",
+    });
   });
 
-  it("reads a response before handling a verification challenge from the same DOM update", async () => {
+  it("fails clearly when verification appears before Copy capture", async () => {
     vi.useFakeTimers();
     try {
-      document.body.innerHTML = '<textarea id="composer"></textarea>';
-      const capture = new TestStrategy().captureResponse(
-        { document, window, responseTimeoutMs: 3_000 },
-        { count: 0, lastText: "" },
-        vi.fn(),
+      const capture = new NativeTargetOnlyStrategy().captureResponse(
+        {
+          document,
+          window,
+          nativeCopy: { capture: vi.fn() },
+          responseTimeoutMs: 3_000,
+        },
+        { count: 0, lastText: "", nativeCopyTargets: [] },
       );
-
-      const response = document.createElement("div");
-      response.className = "assistant-response";
-      response.textContent = "已经生成的回答";
-      const verification = document.createElement("div");
-      verification.id = "verification";
-      document.body.append(response, verification);
-      await vi.advanceTimersByTimeAsync(0);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "partial",
-        text: "已经生成的回答",
-        markdown: "已经生成的回答",
-        message: expect.stringContaining("人工验证"),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not mistake a reindexed historical response for the new answer", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = `
-        <textarea id="composer"></textarea>
-        <div class="assistant-response">旧回复</div>
-      `;
-      const strategy = new TestStrategy();
-      const baseline = await strategy.prepareSubmit({ document, window, timeoutMs: 10 });
-      expect(baseline.entries).toEqual([{ key: "index:0", text: "旧回复" }]);
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(
-        { document, window, responseTimeoutMs: 3_000 },
-        baseline,
-        updates,
-      );
-
-      const current = document.createElement("div");
-      current.className = "assistant-response";
-      document.querySelector(".assistant-response")?.before(current);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(updates).not.toHaveBeenCalled();
-
-      current.textContent = "本轮新回复";
-      await vi.advanceTimersByTimeAsync(2_250);
-
-      await expect(capture).resolves.toMatchObject({
-        status: "completed",
-        text: "本轮新回复",
-      });
-      expect(updates).not.toHaveBeenCalledWith(expect.objectContaining({ text: "旧回复" }));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("fails capture clearly when verification appears before any response", async () => {
-    vi.useFakeTimers();
-    try {
-      document.body.innerHTML = '<textarea id="composer"></textarea>';
-      const capture = new TestStrategy().captureResponse(
-        { document, window, responseTimeoutMs: 3_000 },
-        { count: 0, lastText: "" },
-        vi.fn(),
-      );
-      const verification = document.createElement("div");
-      verification.id = "verification";
-      document.body.append(verification);
+      document.body.innerHTML = '<div id="verification"></div>';
       await vi.advanceTimersByTimeAsync(0);
 
       await expect(capture).resolves.toMatchObject({
         status: "failed",
+        terminalReason: "verification",
         message: expect.stringContaining("人工验证"),
       });
     } finally {

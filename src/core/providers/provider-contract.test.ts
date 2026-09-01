@@ -36,6 +36,49 @@ const fixtures: Record<string, { composer: string; submit: string }> = {
   },
 };
 
+const nativeCopyFixtures: Record<string, string> = {
+  deepseek: `
+    <article data-virtual-list-item-key="answer-1">
+      <div class="ds-assistant-message-main-content">answer</div>
+      <button aria-label="Copy response"></button>
+    </article>`,
+  kimi: `
+    <article class="chat-content-item-assistant" data-message-id="answer-1">
+      <div class="segment-content"><div class="markdown">answer</div></div>
+      <button aria-label="复制"></button>
+    </article>`,
+  coze: `
+    <article data-role="assistant" data-message-id="answer-1">
+      <div class="markdown-body">answer</div><div class="message-action"><button aria-label="复制"></button></div>
+    </article>`,
+  chatgpt: `
+    <article data-testid="conversation-turn-2">
+      <div data-message-author-role="assistant">answer</div>
+      <button data-testid="copy-turn-action-button"></button>
+    </article>`,
+  claude: `
+    <section data-message-id="answer-1">
+      <div data-testid="assistant-message" class="font-claude-response">answer</div>
+      <div data-testid="message-actions"><button data-testid="action-copy"></button></div>
+    </section>`,
+  qwen: `
+    <section class="chat-round" data-chat="answer-1">
+      <div class="chat-answers-card-wrap" data-chat-answers-wrap="answer-1">
+        <div class="answer-text md-text-card"><div class="qk-markdown">answer</div></div>
+        <div data-answer-feedback-toolbar><button aria-label="复制回复"></button></div>
+      </div>
+    </section>`,
+  minimax: `
+    <article data-role="assistant" data-message-id="answer-1">
+      <div class="markdown-body">answer</div><div class="message-action"><button aria-label="Copy response"></button></div>
+    </article>`,
+  doubao: `
+    <div class="list_items"><div class="v_list_row" data-message-id="answer-1">
+      <div class="flow-markdown-body">answer</div>
+      <div class="message-action-bar"><button aria-label="复制回复"></button></div>
+    </div></div>`,
+};
+
 describe("Provider plugin contract", () => {
   beforeEach(() => {
     document.body.replaceChildren();
@@ -75,6 +118,26 @@ describe("Provider plugin contract", () => {
       const value = composer instanceof HTMLTextAreaElement ? composer.value : composer.textContent;
       expect(value).toBe("");
       expect(click).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(providerRegistry.all().map((plugin) => [plugin.definition.id, plugin] as const))(
+    "%s registers a response-level native Copy target",
+    async (providerId, plugin) => {
+      const fixture = fixtures[providerId];
+      const copyFixture = nativeCopyFixtures[providerId];
+      expect(fixture).toBeDefined();
+      expect(copyFixture).toBeDefined();
+      document.body.innerHTML = `${fixture!.composer}${fixture!.submit}${copyFixture}`;
+
+      const baseline = await plugin.createStrategy().prepareSubmit({
+        document,
+        window,
+        nativeCopy: { capture: vi.fn() },
+        timeoutMs: 100,
+      });
+
+      expect(baseline.nativeCopyTargets).toHaveLength(1);
     },
   );
 

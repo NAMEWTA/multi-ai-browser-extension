@@ -2,6 +2,8 @@ import type { ProviderSelectors } from "../../core/providers/contracts";
 
 export const doubaoNativeCopySelectors = {
   turn: [
+    ".list_items > .v_list_row",
+    "[class*='list_items'] > [class*='v_list_row']",
     "[data-message-id]",
     "[data-local-message-id]",
     "[data-msg-id]",
@@ -14,6 +16,7 @@ export const doubaoNativeCopySelectors = {
     "[class*='message-block-container']",
   ],
   action: [
+    "[class*='message-action-bar' i]",
     "[class*='message-action' i]",
     "[class*='message-toolbar' i]",
     "[data-testid*='message_action' i]",
@@ -22,6 +25,8 @@ export const doubaoNativeCopySelectors = {
     "[class*='operation' i]",
   ],
   copy: [
+    "button[class*='copy' i]",
+    "[role='button'][class*='copy' i]",
     "button[data-testid*='copy' i]",
     "[role='button'][data-testid*='copy' i]",
     "button[aria-label*='复制']",
@@ -63,6 +68,7 @@ export const doubaoSelectors = {
   ],
   responses: [
     ".assistant-response",
+    ".list_items > .v_list_row:has(.flow-markdown-body, .md-box-root, [class*='md-box-root'])",
     "[data-message-id]:has(.flow-markdown-body)",
     "[data-local-message-id]:has(.flow-markdown-body)",
     "[data-testid='receive_message']:has(.flow-markdown-body, [class*='markdown' i])",
@@ -100,6 +106,7 @@ export const doubaoSelectors = {
         id: "assistant-message",
         confidence: "canonical",
         selectors: [
+          ".list_items > .v_list_row:has(.flow-markdown-body, .md-box-root, [class*='md-box-root'])",
           "[data-message-id]:has(.flow-markdown-body)",
           "[data-local-message-id]:has(.flow-markdown-body)",
           "[data-testid='receive_message']:has(.flow-markdown-body, [class*='markdown' i])",

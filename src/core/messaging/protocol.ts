@@ -102,8 +102,7 @@ export const responseTerminalReasonSchema = z.enum([
 export const responseCaptureSourceSchema = z.enum(["dom", "native-copy", "provider-api"]);
 export const nativeCopyMimeTypeSchema = z.enum(["text/markdown", "text/plain", "text/html"]);
 
-export const providerResponseUpdateSchema = z.object({
-  type: z.literal("PROVIDER_RESPONSE_UPDATE"),
+const responseUpdateBodySchema = z.object({
   panelId: z.string().min(1),
   providerId: providerIdSchema,
   sessionId: z.string().min(1),
@@ -120,9 +119,40 @@ export const providerResponseUpdateSchema = z.object({
   nativeMimeType: nativeCopyMimeTypeSchema.optional(),
 });
 
-export const workspaceResponseUpdateSchema = providerResponseUpdateSchema.extend({
-  type: z.literal("WORKSPACE_RESPONSE_UPDATE"),
-});
+function responseUpdateSchemaFor<
+  const Type extends "PROVIDER_RESPONSE_UPDATE" | "WORKSPACE_RESPONSE_UPDATE",
+>(type: Type) {
+  return responseUpdateBodySchema
+    .extend({ type: z.literal(type) })
+    .superRefine((update, context) => {
+      const hasBody = update.text !== undefined || update.markdown !== undefined;
+      if (!hasBody) return;
+      if (update.status !== "completed" && update.status !== "partial") {
+        context.addIssue({
+          code: "custom",
+          path: ["status"],
+          message: "Response body is allowed only on a terminal capture update",
+        });
+      }
+      if (update.captureSource !== "native-copy") {
+        context.addIssue({
+          code: "custom",
+          path: ["captureSource"],
+          message: "Response body must originate from the provider native Copy action",
+        });
+      }
+      if (!update.nativeMimeType) {
+        context.addIssue({
+          code: "custom",
+          path: ["nativeMimeType"],
+          message: "Native response body must declare its clipboard MIME type",
+        });
+      }
+    });
+}
+
+export const providerResponseUpdateSchema = responseUpdateSchemaFor("PROVIDER_RESPONSE_UPDATE");
+export const workspaceResponseUpdateSchema = responseUpdateSchemaFor("WORKSPACE_RESPONSE_UPDATE");
 
 export const providerUrlUpdateSchema = z.object({
   type: z.literal("PROVIDER_URL_UPDATE"),

@@ -21,7 +21,7 @@ import {
   waitForResolvedElement,
 } from "./dom";
 import { ProviderError } from "./errors";
-import { captureNativeResponse, captureNativeTarget } from "./native-copy";
+import { captureNativeTarget } from "./native-copy";
 import { readResponseContent, type ResponseContentSnapshot } from "./response-content";
 import { ButtonSubmitter } from "./submitters/button-submitter";
 import { CompositeComposerWriter } from "./writers/composer-writer";
@@ -156,73 +156,37 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   async captureResponse(
     ctx: FrameContext,
     baseline: ResponseBaseline,
-    onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
     prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate> {
-    if (!this.selectors.responses?.length && !this.selectors.responseCapture?.turnTiers.length) {
+    const adapter = this.nativeCopyAdapter;
+    if (!adapter || !ctx.nativeCopy) {
       return {
         status: "unsupported",
         terminalReason: "unsupported",
-        message: "当前站点尚未配置回复采集规则",
+        message: "当前站点未提供原生 Copy 回复采集能力",
       };
     }
 
     const timeoutMs = this.selectors.responseTimeoutMs ?? ctx.responseTimeoutMs ?? 180_000;
-    const quietMs = this.selectors.responseQuietMs ?? 1_800;
     const pollMs = this.selectors.responsePollMs ?? 1_000;
+    const stableMs = Math.max(
+      250,
+      Math.min(adapter.capturePolicy?.terminalStableMs ?? 1_500, 10_000),
+    );
     const startedAt = Date.now();
-    const baselineKeys = new Set(baseline.keys ?? []);
-    const baselineFallbackTexts = new Set(
-      (baseline.entries ?? [])
-        .filter(({ key, text }) => key.startsWith("index:") && Boolean(text))
-        .map(({ text }) => text),
-    );
-    const baselineElements = new Set(baseline.elements ?? []);
-    const baselineElementKeys = new Map(
-      (baseline.elements ?? []).map(
-        (element, index) => [element, baseline.entries?.[index]?.key] as const,
-      ),
-    );
-    const responseSnapshots = (document: Document) => this.responseSnapshots(document);
-    const responseGenerating = (document: Document, response: HTMLElement) =>
-      this.isResponseGenerating(document, response);
-    const responseInterrupted = (document: Document, response: HTMLElement) =>
-      this.isResponseInterrupted(document, response);
-    const anyResponseGenerating = (document: Document) =>
-      this.selectors.generating
-        ? Boolean(findFirstUsable(document, this.selectors.generating))
-        : false;
-    const findBlocked = (document: Document) => this.findBlocked(document);
-    const nativeCopyAdapter = this.nativeCopyAdapter;
-    const nativeCopyReady = (response: HTMLElement) => {
-      if (!nativeCopyAdapter || !ctx.nativeCopy) return false;
-      const button = nativeCopyAdapter.locateCopyButton(ctx, response);
-      return Boolean(button && nativeCopyAdapter.isReady?.(ctx, response, button) !== false);
-    };
     const capturePlan = this.selectors.responseCapture;
 
-    return await new Promise<ResponseCaptureUpdate>((resolve, reject) => {
+    return await new Promise<ResponseCaptureUpdate>((resolve) => {
       let settled = false;
       let checking = false;
       let checkAgain = false;
       let deadlineReached = false;
-      let selectedTurnKey: string | undefined;
-      let bestSnapshot: ResponseContentSnapshot | undefined;
-      let latestText = "";
-      let latestMarkdown = "";
-      let lastReportedText = "";
-      let lastReportedMarkdown = "";
-      let lastChangedAt = startedAt;
-      let generatingSeen = false;
-      let generatingStoppedAt: number | undefined;
       let scheduledCheck: number | undefined;
-      let quietTimer: number | undefined;
-      let quietCheckAt: number | undefined;
+      let stableTimer: number | undefined;
+      let stableCheckAt: number | undefined;
       let terminalFingerprint: string | undefined;
-      let nativeTerminalFingerprint: string | undefined;
-      let nativeTerminalObservedAt: number | undefined;
-      let nativeCopyAttempted = false;
-      let generationReported = false;
+      let terminalObservedAt: number | undefined;
+      let captureAttempted = false;
 
       const observer = new MutationObserver(() => scheduleCheck());
       const poll = ctx.window.setInterval(() => scheduleCheck(), pollMs);
@@ -237,48 +201,30 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           finish(rescued);
           return;
         }
-        if (latestText) {
-          finish({
-            status: "partial",
-            terminalReason: "aborted",
-            text: latestText,
-            markdown: latestMarkdown,
-            captureSource: "dom",
-            message: "回复采集已取消，已保存当前可见内容",
-          });
-          return;
-        }
-        finishWithError(new ProviderError("ABORTED", "回复采集已取消"));
+        finish({
+          status: "failed",
+          terminalReason: "aborted",
+          message: "回复采集已取消，未保存未完成的 DOM 内容",
+        });
       };
 
-      function cleanup(): void {
+      const cleanup = (): void => {
         observer.disconnect();
         ctx.window.clearInterval(poll);
         ctx.window.clearTimeout(deadline);
         if (scheduledCheck !== undefined) ctx.window.clearTimeout(scheduledCheck);
-        if (quietTimer !== undefined) ctx.window.clearTimeout(quietTimer);
+        if (stableTimer !== undefined) ctx.window.clearTimeout(stableTimer);
         ctx.signal?.removeEventListener("abort", abort);
-      }
+      };
 
-      function finish(update: ResponseCaptureUpdate): void {
+      const finish = (update: ResponseCaptureUpdate): void => {
         if (settled) return;
         settled = true;
         cleanup();
         resolve(update);
-      }
+      };
 
-      function finishWithError(error: unknown): void {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(
-          error instanceof ProviderError
-            ? error
-            : new ProviderError("RESPONSE_CAPTURE_FAILED", "回复采集失败", { cause: error }),
-        );
-      }
-
-      function scheduleCheck(delayMs = 0): void {
+      const scheduleCheck = (delayMs = 0): void => {
         if (settled) return;
         checkAgain = true;
         if (checking || scheduledCheck !== undefined) return;
@@ -286,286 +232,110 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           scheduledCheck = undefined;
           void runCheck();
         }, delayMs);
-      }
+      };
 
-      function scheduleQuietCheck(delayMs: number): void {
+      const scheduleStableCheck = (delayMs: number): void => {
         const normalizedDelay = Math.max(0, delayMs);
         const requestedAt = Date.now() + normalizedDelay;
-        if (quietTimer !== undefined && quietCheckAt !== undefined && quietCheckAt <= requestedAt) {
+        if (
+          stableTimer !== undefined &&
+          stableCheckAt !== undefined &&
+          stableCheckAt <= requestedAt
+        ) {
           return;
         }
-        if (quietTimer !== undefined) ctx.window.clearTimeout(quietTimer);
-        quietCheckAt = requestedAt;
-        quietTimer = ctx.window.setTimeout(() => {
-          quietTimer = undefined;
-          quietCheckAt = undefined;
+        if (stableTimer !== undefined) ctx.window.clearTimeout(stableTimer);
+        stableCheckAt = requestedAt;
+        stableTimer = ctx.window.setTimeout(() => {
+          stableTimer = undefined;
+          stableCheckAt = undefined;
           scheduleCheck();
         }, normalizedDelay);
-      }
+      };
 
-      async function runCheck(): Promise<void> {
+      const resetTerminalStability = (): void => {
+        terminalFingerprint = undefined;
+        terminalObservedAt = undefined;
+      };
+
+      const runCheck = async (): Promise<void> => {
         if (settled || checking) return;
         checking = true;
         checkAgain = false;
         try {
-          const snapshots = responseSnapshots(ctx.document);
-          const selected = selectResponseSnapshot(snapshots);
-          const now = Date.now();
-          const nativeTarget = selectNativeCopyTarget(
-            nativeCopyAdapter,
-            ctx,
-            baseline,
-            prompt?.text,
-          );
+          if (this.findBlocked(ctx.document)) {
+            finish({
+              status: "failed",
+              terminalReason: "verification",
+              message: "官网要求完成人工验证；验证前不会保存页面 DOM 片段",
+            });
+            return;
+          }
 
-          if (
-            nativeTarget &&
-            !nativeCopyAttempted &&
-            nativeCopyAdapter?.isTerminalTarget?.(ctx, nativeTarget) === true
-          ) {
-            const fingerprint = nativeCopyTargetFingerprint(nativeTarget);
-            const stableFor =
-              nativeTerminalFingerprint === fingerprint && nativeTerminalObservedAt !== undefined
-                ? now - nativeTerminalObservedAt
-                : 0;
-            if (stableFor >= 250) {
-              nativeCopyAttempted = true;
-              const targetSnapshot = bestResponseSnapshot(
-                snapshots.filter((snapshot) =>
-                  responseContains(nativeTarget.response, snapshot.element),
+          const target = selectNativeCopyTarget(adapter, ctx, baseline, prompt?.text);
+          const now = Date.now();
+          if (target && !captureAttempted && adapter.isTerminalTarget?.(ctx, target) === true) {
+            const fingerprint = nativeCopyTargetFingerprint(target);
+            if (terminalFingerprint !== fingerprint) {
+              terminalFingerprint = fingerprint;
+              terminalObservedAt = now;
+            }
+            const stableFor = now - (terminalObservedAt ?? now);
+            if (stableFor >= stableMs) {
+              captureAttempted = true;
+              const snapshots = this.responseSnapshots(ctx.document);
+              const snapshot = bestResponseSnapshot(
+                snapshots.filter((candidate) =>
+                  responseContains(target.response, candidate.element),
                 ),
               );
               const native = await captureNativeTarget(
-                nativeCopyAdapter,
+                adapter,
                 ctx,
-                nativeTarget,
-                targetSnapshot,
+                target,
+                snapshot,
                 prompt,
               ).catch(() => undefined);
               if (native) {
                 finish(native);
                 return;
               }
-              if (!nativeTarget.response.isConnected || !nativeTarget.button.isConnected) {
-                nativeCopyAttempted = false;
-                nativeTerminalFingerprint = undefined;
-                nativeTerminalObservedAt = undefined;
-                scheduleQuietCheck(250);
+              if (!target.response.isConnected || !target.button.isConnected) {
+                captureAttempted = false;
+                resetTerminalStability();
+                scheduleStableCheck(250);
                 return;
               }
-              if (targetSnapshot?.text) {
-                finish({
-                  status: "partial",
-                  terminalReason: "uncertain-final",
-                  text: targetSnapshot.text,
-                  markdown: targetSnapshot.markdown,
-                  captureSource: "dom",
-                  message: "官网回复已结束，但原生复制失败，已保存当前可见内容",
-                });
-              } else {
-                finish({
-                  status: "failed",
-                  terminalReason: "failed",
-                  message: "官网回复已结束，但未能从该回复的复制按钮取得内容",
-                });
-              }
+              finish({
+                status: "failed",
+                terminalReason: "failed",
+                message: "官网回复已结束，但从本轮原生 Copy 按钮取得的内容无效",
+              });
               return;
             }
-            if (nativeTerminalFingerprint !== fingerprint) {
-              nativeTerminalFingerprint = fingerprint;
-              nativeTerminalObservedAt = now;
-            }
-            scheduleQuietCheck(250 - stableFor);
-          } else if (!nativeCopyAttempted) {
-            nativeTerminalFingerprint = undefined;
-            nativeTerminalObservedAt = undefined;
-          }
-
-          if (selected) {
-            selectedTurnKey = selected.key;
-            const accepted = shouldAcceptSnapshot(selected, bestSnapshot);
-            if (accepted) {
-              bestSnapshot = selected;
-              if (
-                selected.text &&
-                (selected.text !== latestText || selected.markdown !== latestMarkdown)
-              ) {
-                latestText = selected.text;
-                latestMarkdown = selected.markdown;
-                lastChangedAt = now;
-                terminalFingerprint = undefined;
-              }
-            }
-            if (
-              latestText &&
-              (latestText !== lastReportedText || latestMarkdown !== lastReportedMarkdown)
-            ) {
-              lastReportedText = latestText;
-              lastReportedMarkdown = latestMarkdown;
-              await onUpdate({ status: "streaming", text: latestText, markdown: latestMarkdown });
-            }
-
-            const generating = responseGenerating(ctx.document, selected.element);
-            if (generating) {
-              generatingSeen = true;
-              generationReported = true;
-              generatingStoppedAt = undefined;
-              terminalFingerprint = undefined;
-            } else if (generatingSeen && generatingStoppedAt === undefined) {
-              generatingStoppedAt = now;
-            }
-
-            const interrupted = responseInterrupted(ctx.document, selected.element);
-            if (latestText && !generating && interrupted) {
-              const fingerprint = `interrupted\u0000${responseFingerprint(selected)}`;
-              if (accepted && terminalFingerprint === fingerprint) {
-                finish(
-                  await finalizeSnapshot(
-                    selected,
-                    "partial",
-                    "interrupted",
-                    latestText,
-                    latestMarkdown,
-                  ),
-                );
-                return;
-              }
-              terminalFingerprint = accepted ? fingerprint : undefined;
-              scheduleQuietCheck(250);
-            } else {
-              const hasTerminalEvidence = generatingSeen
-                ? generatingStoppedAt !== undefined
-                : Boolean(
-                    capturePlan?.allowStableCompletionWithoutGenerating &&
-                    bestSnapshot?.hasFinalContainer,
-                  ) || !capturePlan;
-              if (latestText && !generating && hasTerminalEvidence) {
-                const quietSince = Math.max(lastChangedAt, generatingStoppedAt ?? 0);
-                const quietFor = now - quietSince;
-                const requiredQuietMs =
-                  generatingSeen &&
-                  generatingStoppedAt !== undefined &&
-                  nativeCopyReady(selected.element)
-                    ? Math.min(quietMs, 750)
-                    : quietMs;
-                if (quietFor >= requiredQuietMs) {
-                  const fingerprint = responseFingerprint(selected);
-                  if (accepted && terminalFingerprint === fingerprint) {
-                    finish(
-                      await finalizeSnapshot(
-                        selected,
-                        "completed",
-                        "completed",
-                        latestText,
-                        latestMarkdown,
-                      ),
-                    );
-                    return;
-                  }
-                  terminalFingerprint = accepted ? fingerprint : undefined;
-                  scheduleQuietCheck(250);
-                } else {
-                  terminalFingerprint = undefined;
-                  scheduleQuietCheck(requiredQuietMs - quietFor);
-                }
-              }
-            }
-          } else if (!generationReported && anyResponseGenerating(ctx.document)) {
-            generationReported = true;
-            await onUpdate({ status: "streaming" });
-          }
-
-          if (findBlocked(ctx.document)) {
-            finish(
-              latestText
-                ? {
-                    status: "partial",
-                    terminalReason: "verification",
-                    text: latestText,
-                    markdown: latestMarkdown,
-                    message: "官网要求完成人工验证，已保存当前可见内容",
-                  }
-                : {
-                    status: "failed",
-                    terminalReason: "verification",
-                    message: "官网要求完成人工验证，请验证后重新发送",
-                  },
-            );
-            return;
+            scheduleStableCheck(stableMs - stableFor);
+          } else if (!captureAttempted) {
+            resetTerminalStability();
           }
 
           if (deadlineReached || now - startedAt >= timeoutMs) {
-            finish(
-              latestText
-                ? {
-                    status: "partial",
-                    terminalReason: generatingSeen ? "timeout" : "uncertain-final",
-                    text: latestText,
-                    markdown: latestMarkdown,
-                    message: "等待回复结束超时，已保存当前可见内容",
-                  }
-                : {
-                    status: "timeout",
-                    terminalReason: "timeout",
-                    message: "未检测到新的回复内容，请检查官网页面或更新采集规则",
-                  },
-            );
+            finish({
+              status: "timeout",
+              terminalReason: "timeout",
+              message: "等待本轮回复的原生 Copy 按钮进入稳定终态超时",
+            });
           }
-        } catch (error) {
-          finishWithError(error);
+        } catch {
+          finish({
+            status: "failed",
+            terminalReason: "failed",
+            message: "原生 Copy 回复采集失败",
+          });
         } finally {
           checking = false;
           if (checkAgain && !settled) scheduleCheck();
         }
-      }
-
-      async function finalizeSnapshot(
-        snapshot: ResponseContentSnapshot,
-        status: "completed" | "partial",
-        terminalReason: "completed" | "interrupted",
-        text: string,
-        markdown: string,
-      ): Promise<ResponseCaptureUpdate> {
-        const native = await captureNativeResponse(nativeCopyAdapter, ctx, snapshot, prompt).catch(
-          () => undefined,
-        );
-        if (native) return { ...native, status, terminalReason };
-        return { status, terminalReason, text, markdown, captureSource: "dom" };
-      }
-
-      function selectResponseSnapshot(
-        snapshots: readonly ResponseContentSnapshot[],
-      ): ResponseContentSnapshot | undefined {
-        if (selectedTurnKey) {
-          const selected = bestResponseSnapshot(
-            snapshots.filter((snapshot) => snapshot.key === selectedTurnKey),
-          );
-          if (selected) return selected;
-          selectedTurnKey = undefined;
-        }
-        const added = snapshots.filter((snapshot) => {
-          const previousElementKey = baselineElementKeys.get(snapshot.element);
-          if (
-            baselineElements.has(snapshot.element) &&
-            (previousElementKey === undefined ||
-              previousElementKey === snapshot.key ||
-              previousElementKey.startsWith("index:") ||
-              snapshot.key.startsWith("index:"))
-          ) {
-            return false;
-          }
-          if (baselineKeys.has(snapshot.key)) {
-            if (!snapshot.key.startsWith("index:")) return false;
-            return !baselineFallbackTexts.has(snapshot.text);
-          }
-          return !(snapshot.key.startsWith("index:") && baselineFallbackTexts.has(snapshot.text));
-        });
-        if (added.length) {
-          const lastKey = added.at(-1)!.key;
-          return bestResponseSnapshot(added.filter((snapshot) => snapshot.key === lastKey));
-        }
-        return undefined;
-      }
+      };
 
       ctx.signal?.addEventListener("abort", abort, { once: true });
       if (ctx.signal?.aborted) {
@@ -582,8 +352,8 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           "hidden",
           "aria-hidden",
           "aria-label",
-          "data-chat",
-          "data-chat-answers-wrap",
+          "aria-disabled",
+          "data-state",
           "data-message-id",
           ...new Set(capturePlan?.observeAttributes ?? []),
         ],
@@ -597,40 +367,15 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     baseline: ResponseBaseline,
     prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate | undefined> {
+    const adapter = this.nativeCopyAdapter;
+    if (!adapter || !ctx.nativeCopy) return undefined;
+    const target = selectNativeCopyTarget(adapter, ctx, baseline, prompt?.text);
+    if (!target || adapter.isTerminalTarget?.(ctx, target) !== true) return undefined;
     const snapshots = this.responseSnapshots(ctx.document);
-    const nativeTarget = selectNativeCopyTarget(
-      this.nativeCopyAdapter,
-      ctx,
-      baseline,
-      prompt?.text,
+    const snapshot = bestResponseSnapshot(
+      snapshots.filter((candidate) => responseContains(target.response, candidate.element)),
     );
-    if (nativeTarget && this.nativeCopyAdapter?.isTerminalTarget?.(ctx, nativeTarget) === true) {
-      const targetSnapshot = bestResponseSnapshot(
-        snapshots.filter((snapshot) => responseContains(nativeTarget.response, snapshot.element)),
-      );
-      const native = await captureNativeTarget(
-        this.nativeCopyAdapter,
-        ctx,
-        nativeTarget,
-        targetSnapshot,
-        prompt,
-      ).catch(() => undefined);
-      if (native) return native;
-    }
-    const snapshot = selectSnapshotAfterBaseline(snapshots, baseline);
-    if (!snapshot?.text) return undefined;
-    const native = await captureNativeResponse(this.nativeCopyAdapter, ctx, snapshot, prompt).catch(
-      () => undefined,
-    );
-    if (native) return native;
-    return {
-      status: "partial",
-      terminalReason: "uncertain-final",
-      text: snapshot.text,
-      markdown: snapshot.markdown,
-      captureSource: "dom",
-      message: "下一轮已开始；上一轮终态未确认，已保留当前可见内容",
-    };
+    return await captureNativeTarget(adapter, ctx, target, snapshot, prompt).catch(() => undefined);
   }
 
   async startNewConversation(ctx: FrameContext): Promise<void> {
@@ -730,64 +475,6 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   protected findBlocked(document: Document): HTMLElement | undefined {
     return this.selectors.blocked ? findFirstUsable(document, this.selectors.blocked) : undefined;
   }
-
-  protected isResponseGenerating(document: Document, response: HTMLElement): boolean {
-    void response;
-    return this.selectors.generating
-      ? Boolean(findFirstUsable(document, this.selectors.generating))
-      : false;
-  }
-
-  protected isResponseInterrupted(document: Document, response: HTMLElement): boolean {
-    void document;
-    const plan = this.selectors.responseCapture;
-    if (!plan?.interrupted?.length) return false;
-    const labels = new Set(plan.interruptedLabels ?? []);
-    return [...response.querySelectorAll<HTMLElement>(plan.interrupted.join(","))].some(
-      (element) =>
-        isElementUsable(element) &&
-        (!labels.size || labels.has(normalizeComposerValue(element.textContent ?? ""))),
-    );
-  }
-}
-
-function selectSnapshotAfterBaseline(
-  snapshots: readonly ResponseContentSnapshot[],
-  baseline: ResponseBaseline,
-): ResponseContentSnapshot | undefined {
-  const keys = new Set(baseline.keys ?? []);
-  const elements = new Set(baseline.elements ?? []);
-  const elementKeys = new Map(
-    (baseline.elements ?? []).map(
-      (element, index) => [element, baseline.entries?.[index]?.key] as const,
-    ),
-  );
-  const fallbackTexts = new Set(
-    (baseline.entries ?? [])
-      .filter(({ key, text }) => key.startsWith("index:") && Boolean(text))
-      .map(({ text }) => text),
-  );
-  const added = snapshots.filter((snapshot) => {
-    const previousElementKey = elementKeys.get(snapshot.element);
-    if (
-      elements.has(snapshot.element) &&
-      (previousElementKey === undefined ||
-        previousElementKey === snapshot.key ||
-        previousElementKey.startsWith("index:") ||
-        snapshot.key.startsWith("index:"))
-    ) {
-      return false;
-    }
-    if (!keys.has(snapshot.key)) {
-      return !(snapshot.key.startsWith("index:") && fallbackTexts.has(snapshot.text));
-    }
-    return snapshot.key.startsWith("index:") && !fallbackTexts.has(snapshot.text);
-  });
-  if (added.length) {
-    const lastKey = added.at(-1)!.key;
-    return bestResponseSnapshot(added.filter((snapshot) => snapshot.key === lastKey));
-  }
-  return undefined;
 }
 
 function selectNativeCopyTarget(
@@ -852,24 +539,4 @@ function compareResponseSnapshots(
   right: ResponseContentSnapshot,
 ): number {
   return left.quality - right.quality || left.text.length - right.text.length;
-}
-
-function shouldAcceptSnapshot(
-  next: ResponseContentSnapshot,
-  current: ResponseContentSnapshot | undefined,
-): boolean {
-  if (!next.text || next.statusOnly) return false;
-  if (!current || next.key !== current.key || next.quality > current.quality) return true;
-  if (next.quality < current.quality) return false;
-  return next.text.length >= current.text.length;
-}
-
-function responseFingerprint(snapshot: ResponseContentSnapshot): string {
-  return [
-    snapshot.key,
-    snapshot.candidateId,
-    snapshot.quality,
-    snapshot.text,
-    snapshot.markdown,
-  ].join("\u0000");
 }

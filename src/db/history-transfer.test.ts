@@ -42,7 +42,22 @@ describe("history JSONL transfer", () => {
       [{ panelId: "panel-ds", providerId: "deepseek", providerName: "DeepSeek" }],
       [{ panelId: "panel-ds", status: "submitted" }],
     );
-    await applyResponseUpdate(turn.id, "panel-ds", "completed", "导出的最终回复");
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "completed",
+      "导出的最终回复",
+      undefined,
+      undefined,
+      {
+        captureId: "capture-export",
+        revision: 1,
+        observedAt: "2026-09-01T08:00:00.000Z",
+        terminalReason: "completed",
+        captureSource: "native-copy",
+        nativeMimeType: "text/plain",
+      },
+    );
     const jsonl = await exportHistoryJsonl();
     expect(JSON.parse(jsonl.split("\n")[0]!)).toMatchObject({
       type: "manifest",

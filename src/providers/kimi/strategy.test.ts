@@ -123,15 +123,20 @@ describe("KimiStrategy", () => {
       `;
       document.body.append(list);
       const strategy = new KimiStrategy();
-      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 30_000 };
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## 当前回答\n\n正文",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 30_000 };
       const baseline = await strategy.prepareSubmit(ctx);
       expect(baseline).toMatchObject({
         keys: ["kimi-turn:old-message"],
         lastKey: "kimi-turn:old-message",
         lastText: "你好，我是 Kimi",
       });
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const capture = strategy.captureResponse(ctx, baseline);
       const submit = document.querySelector<HTMLElement>(".send-button-container")!;
       submit.classList.remove("disabled");
       submit.classList.add("stop");
@@ -147,7 +152,6 @@ describe("KimiStrategy", () => {
       `;
       list.prepend(searchingTurn);
       await vi.advanceTimersByTimeAsync(9_000);
-      expect(updates).not.toHaveBeenCalled();
 
       const finalTurn = document.createElement("article");
       finalTurn.className = "chat-content-item-assistant";
@@ -155,24 +159,19 @@ describe("KimiStrategy", () => {
       finalTurn.innerHTML = `
         <div class="segment-content search-status">已获取 5 个网页</div>
         <div class="segment-content"><div class="markdown"><h2>当前回答</h2><p>正文</p></div></div>
+        <button aria-label="复制回复">copy</button>
       `;
       searchingTurn.replaceWith(finalTurn);
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(1);
-      expect(updates).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "streaming",
-          text: expect.stringContaining("当前回答"),
-          markdown: expect.stringContaining("## 当前回答"),
-        }),
-      );
 
       submit.classList.remove("stop");
       submit.classList.add("disabled");
       submit.setAttribute("aria-disabled", "true");
-      await vi.advanceTimersByTimeAsync(8_300);
+      await vi.advanceTimersByTimeAsync(1_600);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
+        captureSource: "native-copy",
         text: expect.stringContaining("当前回答"),
         markdown: expect.not.stringContaining("你好，我是 Kimi"),
       });
@@ -199,22 +198,18 @@ describe("KimiStrategy", () => {
       const strategy = new KimiStrategy();
       const nativeCopy = {
         capture: vi.fn().mockResolvedValue({
-          text: "## Current Kimi answer\n\nThis belongs to the current prompt.",
+          text: "## Current Kimi answer\n\nThis belongs to the current prompt.\n\nVisible current answer",
           mimeType: "text/markdown" as const,
         }),
       };
       const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 3_000 };
       const baseline = await strategy.prepareSubmit(ctx);
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(ctx, baseline, updates, {
+      const capture = strategy.captureResponse(ctx, baseline, {
         text: "current prompt",
       });
 
       document.querySelector(".capacity-banner")?.remove();
       await vi.advanceTimersByTimeAsync(0);
-      expect(updates).not.toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("Old answer") }),
-      );
 
       document.body.insertAdjacentHTML(
         "beforeend",
@@ -226,7 +221,7 @@ describe("KimiStrategy", () => {
           </article>
         `,
       );
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(1_600);
 
       await expect(capture).resolves.toMatchObject({
         status: "completed",

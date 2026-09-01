@@ -57,6 +57,44 @@ describe("workspace targets", () => {
     expect(useWorkspaceStore.getState().layoutMode).toBe("tiles");
   });
 
+  it("migrates the old default layout to DeepSeek, Doubao and Qwen", async () => {
+    storageGet.mockResolvedValue({
+      "workspace-v3": {
+        panels: [
+          {
+            id: "deepseek-panel",
+            providerId: "deepseek",
+            enabled: true,
+            url: "https://chat.deepseek.com/",
+            status: "ready",
+            revision: 0,
+          },
+          {
+            id: "kimi-panel",
+            providerId: "kimi",
+            enabled: true,
+            url: "https://www.kimi.com/",
+            status: "ready",
+            revision: 0,
+          },
+        ],
+        sidebarOpen: true,
+        layoutMode: "tiles",
+        tileRatios: {},
+      },
+    });
+    useWorkspaceStore.setState({ hydrated: false, panels: [], selectedTargetIds: [] });
+
+    await act(async () => useWorkspaceStore.getState().hydrate());
+
+    const state = useWorkspaceStore.getState();
+    expect(state.panels.map((panel) => panel.providerId)).toEqual(["deepseek", "doubao", "qwen"]);
+    expect(state.selectedTargetIds).toEqual(state.panels.map((panel) => panel.id));
+    expect(storageSet).toHaveBeenCalledWith(
+      expect.objectContaining({ "workspace-v4": expect.any(Object) }),
+    );
+  });
+
   it("preserves an intentionally empty workspace", async () => {
     storageGet.mockResolvedValue({
       "workspace-v3": {

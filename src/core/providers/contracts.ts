@@ -148,6 +148,7 @@ export interface NativeCopyTargetSelectionContext {
 export interface NativeCopyCapturePolicy {
   readonly maxAttempts?: number;
   readonly requireDomEndingAnchor?: boolean;
+  readonly terminalStableMs?: number;
 }
 
 export interface NativeCopyAdapter {
@@ -204,7 +205,6 @@ export interface ProviderStrategy {
   captureResponse(
     ctx: FrameContext,
     baseline: ResponseBaseline,
-    onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
     prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate>;
   finalizeResponse?(

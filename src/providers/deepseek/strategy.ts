@@ -1,11 +1,6 @@
 import { BaseDomStrategy } from "../../core/providers/base-dom-strategy";
 import type { FrameContext, ResponseBaseline } from "../../core/providers/contracts";
-import {
-  findFirstUsable,
-  isElementVisible,
-  readComposerValue,
-  waitForElement,
-} from "../../core/providers/dom";
+import { findFirstUsable, readComposerValue, waitForElement } from "../../core/providers/dom";
 import { ProviderError } from "../../core/providers/errors";
 import { deepseekDefinition } from "./definition";
 import { deepseekNativeCopyAdapter } from "./native-copy";
@@ -62,18 +57,6 @@ export class DeepSeekStrategy extends BaseDomStrategy {
     const messageId =
       message?.getAttribute("data-message-id")?.trim() ?? message?.getAttribute("data-id")?.trim();
     return messageId ? `deepseek-message:${messageId}` : super.responseKey(element, index);
-  }
-
-  protected override isResponseGenerating(document: Document, response: HTMLElement): boolean {
-    const scopedSignals = response.querySelectorAll(
-      "[aria-busy='true'], [data-state='loading'], [class*='loading'], [class*='typing']",
-    );
-    if ([...scopedSignals].some((element) => isElementVisible(element))) return true;
-    const sharedControl = document.querySelector<HTMLElement>(
-      "div[role='button'].ds-button--primary.ds-button--circle:not(.ds-button--disabled):not([aria-disabled='true'])",
-    );
-    if (sharedControl && isElementVisible(sharedControl)) return true;
-    return super.isResponseGenerating(document, response);
   }
 }
 

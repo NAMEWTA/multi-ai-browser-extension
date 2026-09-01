@@ -96,14 +96,19 @@ describe("DoubaoStrategy", () => {
         '<article data-message-id="old"><div class="flow-markdown-body">旧回答</div></article>',
       );
       const strategy = new DoubaoStrategy();
-      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 30_000 };
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## 豆包回答\n\n正文内容",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 30_000 };
       const baseline = await strategy.prepareSubmit(ctx);
       expect(baseline).toMatchObject({
         keys: ["doubao-message:old"],
         lastText: "旧回答",
       });
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const capture = strategy.captureResponse(ctx, baseline);
 
       const breakButton = document.createElement("button");
       breakButton.className = "break-btn-current";
@@ -113,22 +118,17 @@ describe("DoubaoStrategy", () => {
         `
           <article data-message-id="current">
             <div class="flow-markdown-body"><h2>豆包回答</h2><p>正文内容</p></div>
+            <div class="message-action-bar"><button aria-label="复制回复">copy</button></div>
           </article>
         `,
       );
       await vi.advanceTimersByTimeAsync(6_001);
-      expect(updates).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "streaming",
-          text: expect.stringContaining("豆包回答"),
-          markdown: expect.stringContaining("## 豆包回答"),
-        }),
-      );
 
       breakButton.remove();
-      await vi.advanceTimersByTimeAsync(6_300);
+      await vi.advanceTimersByTimeAsync(3_100);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
+        captureSource: "native-copy",
         text: expect.stringContaining("正文内容"),
       });
     } finally {
@@ -142,13 +142,13 @@ describe("DoubaoStrategy", () => {
       const strategy = new DoubaoStrategy();
       const nativeCopy = {
         capture: vi.fn().mockResolvedValue({
-          text: "## Doubao complete answer\n\nFull content from the official copy action.",
+          text: "## Doubao complete answer\n\nFull content from the official copy action.\n\nVisible final answer",
           mimeType: "text/markdown" as const,
         }),
       };
-      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 3_000 };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 5_000 };
       const baseline = await strategy.prepareSubmit(ctx);
-      const capture = strategy.captureResponse(ctx, baseline, vi.fn(), {
+      const capture = strategy.captureResponse(ctx, baseline, {
         text: "current Doubao prompt",
       });
 
@@ -165,7 +165,7 @@ describe("DoubaoStrategy", () => {
           </section>
         `,
       );
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(3_100);
 
       await expect(capture).resolves.toMatchObject({
         status: "completed",

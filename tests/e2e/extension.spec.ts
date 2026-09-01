@@ -61,14 +61,15 @@ async function launchContext(userDataDir: string): Promise<BrowserContext> {
   return launched;
 }
 
-test("opens a full-page workspace with DeepSeek and Kimi by default", async () => {
+test("opens a full-page workspace with DeepSeek, Doubao, and Qwen by default", async () => {
   await expect(workspace.locator(".toolbar-title strong")).toHaveText("对比工作台");
-  await expect(workspace.locator("article.provider-panel")).toHaveCount(2);
+  await expect(workspace.locator("article.provider-panel")).toHaveCount(3);
   await expect(workspace.locator("article.provider-panel[data-provider='deepseek']")).toBeVisible();
-  await expect(workspace.locator("article.provider-panel[data-provider='kimi']")).toBeVisible();
+  await expect(workspace.locator("article.provider-panel[data-provider='doubao']")).toBeVisible();
+  await expect(workspace.locator("article.provider-panel[data-provider='qwen']")).toBeVisible();
   await expect(workspace.locator(".global-composer")).toBeVisible();
-  await expect(workspace.locator(".target-summary")).toContainText("发送至 2");
-  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 30_000 });
+  await expect(workspace.locator(".target-summary")).toContainText("发送至 3");
+  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(3, { timeout: 30_000 });
 });
 
 test("keeps the empty prompt selector above provider panel actions", async () => {
@@ -103,7 +104,7 @@ test("keeps drafts isolated from native website composers until submit", async (
   await workspace.waitForTimeout(1_000);
 
   const frames = workspace.locator("article.provider-panel iframe");
-  for (let index = 0; index < 2; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     const frame = frames.nth(index).contentFrame();
     await expect(frame.locator("body")).toHaveAttribute("data-last-synced", "");
     await expect(frame.locator("body")).toHaveAttribute("data-submit-count", "0");
@@ -132,7 +133,7 @@ test("submits exactly once and stores provider replies in the session timeline",
   await workspace.locator(".global-composer textarea").fill(prompt);
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   const frames = workspace.locator("article.provider-panel iframe");
-  for (let index = 0; index < 2; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     const frame = frames.nth(index).contentFrame();
     await expect(frame.locator("body")).toHaveAttribute("data-submit-count", "1");
     await expect(frame.locator("[data-last-prompt]")).toHaveText(prompt);
@@ -143,7 +144,7 @@ test("submits exactly once and stores provider replies in the session timeline",
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail).toContainText(prompt);
   const exchanges = detail.locator(".unified-exchange-record");
-  await expect(exchanges).toHaveCount(2);
+  await expect(exchanges).toHaveCount(3);
   const desktopTimeline = await detail.locator(".unified-history-timeline").boundingBox();
   const desktopNavigation = await detail.locator(".unified-question-navigation").boundingBox();
   expect(desktopNavigation!.x).toBeGreaterThan(desktopTimeline!.x);
@@ -156,7 +157,7 @@ test("submits exactly once and stores provider replies in the session timeline",
       .evaluateAll((summaries) =>
         summaries.map((summary) => summary.getAttribute("aria-expanded")),
       ),
-  ).toEqual(["false", "false"]);
+  ).toEqual(["false", "false", "false"]);
   await detail.screenshot({ path: "test-results/unified-history-anchor-1440x900.png" });
   await exchanges.first().locator(".unified-exchange-summary").click();
   await expect(exchanges.first().locator(".unified-exchange-content")).toContainText(
@@ -197,6 +198,7 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
   await workspace.getByLabel("查看对话记录").first().click();
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail.locator(".unified-turn-record")).toHaveCount(2);
+  await detail.getByRole("button", { name: "第 2 轮：同一会话的第二个问题" }).click();
   await expect(detail.locator(".unified-question-navigation-title")).toContainText("2 / 2");
   await expect(
     detail.locator('.unified-question-navigation button[aria-current="location"]'),
@@ -207,29 +209,23 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
       .evaluateAll((summaries) =>
         summaries.map((summary) => summary.getAttribute("aria-expanded")),
       ),
-  ).toEqual(["false", "false", "false", "false"]);
+  ).toEqual(["false", "false", "false", "false", "false", "false"]);
   await detail.screenshot({ path: "test-results/unified-history-anchor-two-turns-1440x900.png" });
   await detail.getByTitle("关闭").click();
 
-  await expect
-    .poll(async () => {
-      const urls = await getFrameUrls(workspace);
-      return (
-        urls.length === 2 &&
-        urls.every((url) => url.includes("/totally-new/") && url.includes("?source=mock#saved"))
-      );
-    })
-    .toBe(true);
+  await expect.poll(async () => await getFrameUrls(workspace)).toHaveLength(3);
   const oldUrls = await getFrameUrls(workspace);
+  const savedConversationUrl = expect.stringMatching(/\/totally-new\/[^?]+\?source=mock#saved$/);
+  expect(oldUrls).toEqual([savedConversationUrl, savedConversationUrl, savedConversationUrl]);
 
   await workspace.getByRole("button", { name: "新任务", exact: true }).click();
   await expect(workspace.locator(".history-item")).toHaveCount(2);
   await expect
     .poll(async () => {
       const urls = await getFrameUrls(workspace);
-      return urls.length === 2 && urls.every((url) => new URL(url).pathname === "/");
+      return urls.map((url) => new URL(url).pathname);
     })
-    .toBe(true);
+    .toEqual(["/", "/chat/", "/"]);
 
   await workspace.locator(".global-composer textarea").fill("新任务的第一个问题");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
@@ -258,7 +254,7 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
 test("keeps sidebar order stable until a session is explicitly pinned", async () => {
   const olderTitle = "置顶顺序较早会话";
   const currentTitle = "置顶顺序当前会话";
-  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 30_000 });
+  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(3, { timeout: 30_000 });
   await workspace.getByRole("button", { name: "新任务", exact: true }).click();
   await workspace.locator(".global-composer textarea").fill(olderTitle);
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
@@ -285,8 +281,17 @@ test("manages all eight preconfigured websites and exposes experimental embed st
   const picker = workspace.getByRole("dialog", { name: "管理 AI 网页" });
   await expect(picker.locator(".provider-option")).toHaveCount(8);
   await expect(picker.locator(".provider-option", { hasText: "Coze" })).toContainText("实验性");
-  for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax", "豆包"]) {
-    await picker.getByRole("checkbox", { name: `打开 ${name}` }).check();
+  for (const name of [
+    "DeepSeek",
+    "Kimi",
+    "Coze",
+    "ChatGPT",
+    "Claude",
+    "通义千问",
+    "MiniMax",
+    "豆包",
+  ]) {
+    await picker.locator(".provider-option", { hasText: name }).getByRole("checkbox").check();
   }
   await picker.getByRole("button", { name: "完成" }).click();
   await expect(workspace.locator("article.provider-panel")).toHaveCount(8);
@@ -645,7 +650,7 @@ function mockProviderHtml(host: string): string {
       });
       document.querySelector('#new-chat').addEventListener('click', () => {
         document.body.dataset.newSessionCount = String(Number(document.body.dataset.newSessionCount) + 1);
-        document.querySelector('.assistant-response')?.remove();
+        document.querySelectorAll('.assistant-response, [data-mock-user-message]').forEach((element) => element.remove());
         document.querySelector('[data-last-prompt]').textContent = '';
         for (const composer of document.querySelectorAll('textarea, [contenteditable]')) {
           if ('value' in composer) composer.value = '';
@@ -655,14 +660,40 @@ function mockProviderHtml(host: string): string {
       document.querySelector('[data-testid="composer-submit-button"]').addEventListener('click', () => {
           const prompt = readPrompt();
           document.body.dataset.submitCount = String(Number(document.body.dataset.submitCount) + 1);
-          if (location.pathname === '/') {
+          if (!location.pathname.startsWith('/totally-new/')) {
             history.pushState({}, '', '/totally-new/' + crypto.randomUUID() + '?source=mock#saved');
           }
           document.querySelector('[data-last-prompt]').textContent = prompt;
-          const response = document.querySelector('.assistant-response') || document.createElement('div');
-          response.className = 'assistant-response';
-          response.textContent = 'Mock AI 回复：' + prompt;
-          document.querySelector('main').append(response);
+          const turnNumber = document.body.dataset.submitCount;
+          const user = document.createElement('div');
+          user.dataset.mockUserMessage = 'true';
+          user.dataset.role = 'user';
+          user.dataset.messageAuthorRole = 'user';
+          user.dataset.testid = 'user-message-' + turnNumber;
+          user.className = 'chat-content-item-user message-user send-msg-bubble';
+          user.textContent = prompt;
+
+          const responseText = 'Mock AI 回复：' + prompt;
+          const response = document.createElement('article');
+          response.className = 'assistant-response chat-content-item-assistant chat-round last-message-item';
+          response.dataset.role = 'assistant';
+          response.dataset.messageId = 'assistant-' + turnNumber;
+          response.dataset.chat = 'chat-' + turnNumber;
+          response.dataset.testid = 'conversation-turn-' + turnNumber;
+          response.innerHTML =
+            '<div data-testid="assistant-message" data-message-author-role="assistant">' +
+              '<div class="answer-text md-text-card">' +
+                '<div class="qk-markdown flow-markdown-body md-box-root segment-content"></div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="message-action-bar" data-answer-feedback-toolbar role="group">' +
+              '<button class="response-copy" data-testid="copy-turn-action-button" aria-label="Copy response" type="button">Copy</button>' +
+            '</div>';
+          response.querySelector('.qk-markdown').textContent = responseText;
+          response.querySelector('.response-copy').addEventListener('click', () => {
+            void navigator.clipboard.writeText(responseText);
+          });
+          document.querySelector('main').append(user, response);
           for (const composer of document.querySelectorAll('textarea, [contenteditable]')) {
             if ('value' in composer) composer.value = '';
             else composer.replaceChildren();

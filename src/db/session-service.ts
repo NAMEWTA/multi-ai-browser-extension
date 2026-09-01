@@ -259,6 +259,15 @@ export async function recordSuccessfulTurn(
     const responseText = update.responseText ?? previous?.responseText;
     const responseMarkdown = update.responseMarkdown ?? previous?.responseMarkdown;
     const message = update.message ?? previous?.message;
+    const captureSource = update.captureSource ?? previous?.captureSource;
+    const nativeMimeType = update.nativeMimeType ?? previous?.nativeMimeType;
+    assertNativeCopyResponseBody(
+      update.status,
+      responseText,
+      responseMarkdown,
+      captureSource,
+      nativeMimeType,
+    );
     latestResponseByPanel.set(update.panelId, {
       panelId: update.panelId,
       status: update.status,
@@ -282,16 +291,8 @@ export async function recordSuccessfulTurn(
         : previous?.terminalReason !== undefined
           ? { terminalReason: previous.terminalReason }
           : {}),
-      ...(update.captureSource !== undefined
-        ? { captureSource: update.captureSource }
-        : previous?.captureSource !== undefined
-          ? { captureSource: previous.captureSource }
-          : {}),
-      ...(update.nativeMimeType !== undefined
-        ? { nativeMimeType: update.nativeMimeType }
-        : previous?.nativeMimeType !== undefined
-          ? { nativeMimeType: previous.nativeMimeType }
-          : {}),
+      ...(captureSource !== undefined ? { captureSource } : {}),
+      ...(nativeMimeType !== undefined ? { nativeMimeType } : {}),
       ...(responseText !== undefined ? { responseText } : {}),
       ...(responseMarkdown !== undefined ? { responseMarkdown } : {}),
       ...(message !== undefined ? { message } : {}),
@@ -398,6 +399,13 @@ export async function applyResponseUpdate(
   responseMarkdown?: string,
   metadata?: ResponseRevisionMetadata,
 ): Promise<void> {
+  assertNativeCopyResponseBody(
+    status,
+    responseText,
+    responseMarkdown,
+    metadata?.captureSource,
+    metadata?.nativeMimeType,
+  );
   const timestamp = nowIso();
   await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
     const turn = await db.turns.get(turnId);
@@ -487,6 +495,23 @@ export async function applyResponseUpdate(
     await db.turns.update(turnId, { status: turnStatus });
     await db.sessions.update(turn.sessionId, { contentUpdatedAt: timestamp });
   });
+}
+
+function assertNativeCopyResponseBody(
+  status: ExchangeResponseStatus,
+  responseText: string | undefined,
+  responseMarkdown: string | undefined,
+  captureSource: ResponseCaptureSource | undefined,
+  nativeMimeType: NativeCopyMimeType | undefined,
+): void {
+  if (responseText === undefined && responseMarkdown === undefined) return;
+  if (
+    (status !== "completed" && status !== "partial") ||
+    captureSource !== "native-copy" ||
+    nativeMimeType === undefined
+  ) {
+    throw new Error("回复正文只能由终态原生 Copy 结果持久化");
+  }
 }
 
 export async function listSessions(limit = 100): Promise<SessionRecord[]> {

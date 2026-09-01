@@ -41,6 +41,9 @@ describe("native copy MAIN-world bridge", () => {
       suppressSystemClipboard: false,
     });
     await navigator.clipboard.writeText("native markdown text");
+    await vi.waitFor(() =>
+      expect(responses.some((message) => message.type === "captured")).toBe(true),
+    );
     await navigator.clipboard.writeText("manual copy after capture");
 
     expect(originalWriteText).toHaveBeenNthCalledWith(1, "native markdown text");
@@ -67,6 +70,9 @@ describe("native copy MAIN-world bridge", () => {
       suppressSystemClipboard: true,
     });
     await navigator.clipboard.writeText("captured only");
+    await vi.waitFor(() =>
+      expect(responses.some((message) => message.type === "captured")).toBe(true),
+    );
 
     expect(originalWriteText).not.toHaveBeenCalled();
     expect(responses.at(-1)).toEqual({
@@ -102,6 +108,35 @@ describe("native copy MAIN-world bridge", () => {
       type: "captured",
       token: "item-token",
       payload: { text: "text/markdown:full answer", mimeType: "text/markdown" },
+    });
+  });
+
+  it("settles the most complete payload when one Copy click writes more than once", async () => {
+    installClipboard({
+      writeText: vi.fn(async () => undefined),
+      write: vi.fn(async () => undefined),
+    });
+    const responses = collectResponses();
+    uninstall = installNativeCopyMainBridge(window);
+
+    dispatchNativeCopyRequest(window, {
+      type: "arm",
+      token: "multi-write-token",
+      suppressSystemClipboard: true,
+    });
+    await navigator.clipboard.writeText("Title");
+    await navigator.clipboard.writeText("Title\n\nComplete body\n\nFinal paragraph");
+    await vi.waitFor(() =>
+      expect(responses.some((message) => message.type === "captured")).toBe(true),
+    );
+
+    expect(responses.at(-1)).toEqual({
+      type: "captured",
+      token: "multi-write-token",
+      payload: {
+        text: "Title\n\nComplete body\n\nFinal paragraph",
+        mimeType: "text/plain",
+      },
     });
   });
 

@@ -142,15 +142,20 @@ describe("QwenStrategy", () => {
         </section>
       `;
       const strategy = new QwenStrategy();
-      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 10_000 };
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## 结构化回答\n\n**正文**",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 10_000 };
       const baseline = await strategy.prepareSubmit(ctx);
       expect(baseline).toMatchObject({
         keys: ["qwen-chat:old-chat"],
         lastKey: "qwen-chat:old-chat",
         lastText: "旧回复",
       });
-      const updates = vi.fn();
-      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const capture = strategy.captureResponse(ctx, baseline);
 
       const round = document.createElement("section");
       round.className = "chat-round last-message-item";
@@ -160,23 +165,17 @@ describe("QwenStrategy", () => {
           <div class="answer-text md-text-card">
             <div class="qk-markdown"><h2>结构化回答</h2><p><strong>正文</strong></p></div>
           </div>
+          <div data-answer-feedback-toolbar><button aria-label="复制回复">copy</button></div>
           <div class="answer-receiving-card">生成中</div>
         </div>
       `;
       document.body.append(round);
       await vi.advanceTimersByTimeAsync(0);
-      expect(updates).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "streaming",
-          text: expect.stringContaining("结构化回答"),
-          markdown: expect.stringContaining("## 结构化回答"),
-        }),
-      );
 
       round.querySelector(".answer-receiving-card")?.remove();
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(5_999);
+      await vi.advanceTimersByTimeAsync(1_499);
       let completed = false;
       void capture.then(() => {
         completed = true;
@@ -184,9 +183,10 @@ describe("QwenStrategy", () => {
       await Promise.resolve();
       expect(completed).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
+        captureSource: "native-copy",
         text: expect.stringContaining("结构化回答"),
         markdown: expect.stringContaining("## 结构化回答"),
       });
@@ -202,13 +202,13 @@ describe("QwenStrategy", () => {
       const strategy = new QwenStrategy();
       const nativeCopy = {
         capture: vi.fn().mockResolvedValue({
-          text: "## Complete Qwen answer\n\nCopied from the official answer action.",
+          text: "## Complete Qwen answer\n\nCopied from the official answer action.\n\nVisible current answer",
           mimeType: "text/markdown" as const,
         }),
       };
       const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 3_000 };
       const baseline = await strategy.prepareSubmit(ctx);
-      const capture = strategy.captureResponse(ctx, baseline, vi.fn(), {
+      const capture = strategy.captureResponse(ctx, baseline, {
         text: "current Qwen prompt",
       });
 
@@ -227,7 +227,7 @@ describe("QwenStrategy", () => {
           </section>
         `,
       );
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(1_600);
 
       await expect(capture).resolves.toMatchObject({
         status: "completed",

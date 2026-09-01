@@ -58,4 +58,29 @@ describe("doubaoNativeCopyAdapter", () => {
       }),
     ]);
   });
+
+  it("binds the current virtual-list row instead of a historical or code Copy", () => {
+    document.body.innerHTML = `
+      <div class="list_items">
+        <div class="v_list_row">
+          <div class="bg-g-send-msg-bubble">current prompt</div>
+          <button aria-label="复制用户消息"></button>
+        </div>
+        <div class="v_list_row" data-message-id="doubao-current">
+          <div class="flow-markdown-body"><p>Complete current answer</p></div>
+          <pre><button aria-label="复制代码"></button></pre>
+          <div class="message-action-bar"><button class="copy-answer"></button></div>
+        </div>
+      </div>
+    `;
+
+    const targets = doubaoNativeCopyAdapter.listTargets?.({ document, window }) ?? [];
+    expect(targets).toEqual([
+      expect.objectContaining({
+        key: "doubao-copy:doubao-current",
+        response: document.querySelector("[data-message-id='doubao-current']"),
+        button: document.querySelector(".copy-answer"),
+      }),
+    ]);
+  });
 });
