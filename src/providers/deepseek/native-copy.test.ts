@@ -30,6 +30,27 @@ describe("deepseekNativeCopyAdapter", () => {
     expect(button?.textContent).toBe("current");
   });
 
+  it("enumerates assistant turns as stable native-copy targets", () => {
+    document.body.innerHTML = `
+      <article data-virtual-list-item-key="old-turn">
+        <div class="ds-assistant-message-main-content"><p>Old answer</p></div>
+        <button aria-label="Copy response">copy old</button>
+      </article>
+      <article data-virtual-list-item-key="current-turn">
+        <div class="ds-assistant-message-main-content"><p>Current answer</p></div>
+        <button aria-label="Copy response">copy current</button>
+      </article>
+    `;
+
+    expect(deepseekNativeCopyAdapter.listTargets?.(context())).toEqual([
+      expect.objectContaining({ key: "deepseek-copy:old-turn" }),
+      expect.objectContaining({
+        key: "deepseek-copy:current-turn",
+        button: document.querySelector("[data-virtual-list-item-key='current-turn'] button"),
+      }),
+    ]);
+  });
+
   it.each([
     ["aria-label", "Copy response"],
     ["title", "Copy answer"],

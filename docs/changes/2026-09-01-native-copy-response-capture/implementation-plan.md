@@ -2,7 +2,16 @@
 
 日期：2026-09-01
 
-状态：阶段 0-6 已实现并通过自动化验证；阶段 7 真实登录站点灰度验收待执行。
+状态：阶段 0-6 与 Copy-first v2 已实现并通过自动化验证；阶段 7 真实登录站点灰度验收待执行。
+
+## 2026-09-01 Copy-first v2 执行更新
+
+- core 增加 provider 可枚举的 `NativeCopyTarget`，baseline 同时记录正文节点与原生 Copy 目标身份。
+- 当前轮目标可在正文 selector 失效时独立完成捕获；DOM 继续承担 streaming、partial 和降级。
+- 稳定消息 ID 未变的历史节点永久排除；虚拟列表复用节点但稳定 ID 已变化时允许识别为新轮。
+- 原生 Copy 双观察定时器保留最早检查时间，不再被 6-12 秒 DOM 静默计时器覆盖。
+- DeepSeek、Kimi、豆包、通义千问分别在自己的 `providers/<provider>/` 目录注册 adapter。
+- Kimi 历史回复横幅变化不得重新归类为当前回复；豆包复制目标终态不得继续停留在 `waiting`。
 
 ## 1. 实施顺序
 

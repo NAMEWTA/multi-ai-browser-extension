@@ -1,4 +1,10 @@
-import type { NativeCopyAdapter, NativeCopyPayload } from "../../core/providers/contracts";
+import type {
+  FrameContext,
+  NativeCopyAdapter,
+  NativeCopyPayload,
+} from "../../core/providers/contracts";
+import { isElementVisible } from "../../core/providers/dom";
+import { deepseekSelectors } from "./selectors";
 
 const TURN_SELECTORS = [
   "[data-virtual-list-item-key]",
@@ -51,9 +57,18 @@ const NON_RESPONSE_COPY_LABELS = [
 ] as const;
 
 const UI_ONLY_LINES = new Set(["复制", "copy", "已停止", "stopped"]);
+const ASSISTANT_CONTENT_SELECTORS = [
+  ".ds-assistant-message-main-content",
+  ".ds-markdown:not(.ds-think-content .ds-markdown)",
+  "[data-role='assistant']",
+  ".assistant-response",
+] as const;
+const anonymousTurnKeys = new WeakMap<HTMLElement, string>();
+let nextAnonymousTurnKey = 1;
 
 export const deepseekNativeCopyAdapter: NativeCopyAdapter = {
   id: "deepseek-native-copy",
+  capturePolicy: { maxAttempts: 3, requireDomEndingAnchor: false },
 
   locateCopyButton(_ctx, response) {
     const turn = findTurn(response);
@@ -62,6 +77,21 @@ export const deepseekNativeCopyAdapter: NativeCopyAdapter = {
       .map((button) => ({ button, score: scoreCopyControl(button, response) }))
       .toSorted((left, right) => right.score - left.score);
     return candidates[0]?.button;
+  },
+
+  listTargets(ctx) {
+    return listAssistantTurns(ctx).flatMap((response) => {
+      const button = this.locateCopyButton(ctx, response);
+      return button ? [{ key: turnKey(response), response, button }] : [];
+    });
+  },
+
+  isTerminalTarget(ctx, target) {
+    dispatchHover(target.response);
+    return (
+      this.isReady?.(ctx, target.response, target.button) !== false &&
+      !hasVisible(ctx.document, deepseekSelectors.generating ?? [])
+    );
   },
 
   async prepareCopy(ctx, response, button) {
@@ -92,6 +122,32 @@ export const deepseekNativeCopyAdapter: NativeCopyAdapter = {
     return normalizeDeepSeekCopy(payload);
   },
 };
+
+function listAssistantTurns(ctx: FrameContext): HTMLElement[] {
+  const candidates = queryAll(ctx.document, TURN_SELECTORS).filter(
+    (turn) => isElementVisible(turn) && matchesOrContains(turn, ASSISTANT_CONTENT_SELECTORS),
+  );
+  return candidates.filter(
+    (turn) => !candidates.some((candidate) => candidate !== turn && candidate.contains(turn)),
+  );
+}
+
+function turnKey(turn: HTMLElement): string {
+  for (const attribute of [
+    "data-virtual-list-item-key",
+    "data-message-id",
+    "data-id",
+    "data-key",
+  ]) {
+    const value = turn.getAttribute(attribute)?.trim();
+    if (value) return `deepseek-copy:${value}`;
+  }
+  const existing = anonymousTurnKeys.get(turn);
+  if (existing) return existing;
+  const key = `deepseek-copy-node:${nextAnonymousTurnKey++}`;
+  anonymousTurnKeys.set(turn, key);
+  return key;
+}
 
 function findTurn(response: HTMLElement): HTMLElement {
   for (const selector of TURN_SELECTORS) {
@@ -146,6 +202,33 @@ function dispatchHover(target: HTMLElement): void {
   for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]) {
     target.dispatchEvent(new MouseEvent(type, eventOptions));
   }
+}
+
+function hasVisible(document: Document, selectors: readonly string[]): boolean {
+  return queryAll(document, selectors).some(isElementVisible);
+}
+
+function matchesOrContains(root: HTMLElement, selectors: readonly string[]): boolean {
+  return selectors.some(
+    (selector) => root.matches(selector) || Boolean(root.querySelector(selector)),
+  );
+}
+
+function queryAll(root: ParentNode, selectors: readonly string[]): HTMLElement[] {
+  const result: HTMLElement[] = [];
+  for (const selector of selectors) {
+    for (const element of root.querySelectorAll<HTMLElement>(selector)) {
+      if (!result.includes(element)) result.push(element);
+    }
+  }
+  return result.toSorted((left, right) => {
+    const position = left.compareDocumentPosition(right);
+    return position & Node.DOCUMENT_POSITION_FOLLOWING
+      ? -1
+      : position & Node.DOCUMENT_POSITION_PRECEDING
+        ? 1
+        : 0;
+  });
 }
 
 function normalizeDeepSeekCopy(payload: NativeCopyPayload): NativeCopyPayload {

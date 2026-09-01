@@ -135,4 +135,51 @@ describe("DoubaoStrategy", () => {
       vi.useRealTimers();
     }
   });
+
+  it("completes from the current official copy action on the modern Doubao DOM", async () => {
+    vi.useFakeTimers();
+    try {
+      const strategy = new DoubaoStrategy();
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## Doubao complete answer\n\nFull content from the official copy action.",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 3_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      const capture = strategy.captureResponse(ctx, baseline, vi.fn(), {
+        text: "current Doubao prompt",
+      });
+
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
+          <section data-testid="union_message" data-message-id="doubao-current">
+            <div data-testid="message-block-container">
+              <div class="md-box-root"><p>Visible final answer</p></div>
+            </div>
+            <div class="message-actions">
+              <button type="button"><svg name="Copy"></svg></button>
+            </div>
+          </section>
+        `,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        terminalReason: "completed",
+        captureSource: "native-copy",
+        markdown: expect.stringContaining("official copy action"),
+      });
+      expect(nativeCopy.capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          button: document.querySelector("[data-message-id='doubao-current'] button"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

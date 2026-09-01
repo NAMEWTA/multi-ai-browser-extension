@@ -195,6 +195,55 @@ describe("QwenStrategy", () => {
     }
   });
 
+  it("completes from the current Qwen feedback-toolbar copy action", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea class="message-input-textarea"></textarea>';
+      const strategy = new QwenStrategy();
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## Complete Qwen answer\n\nCopied from the official answer action.",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 3_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      const capture = strategy.captureResponse(ctx, baseline, vi.fn(), {
+        text: "current Qwen prompt",
+      });
+
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
+          <section class="chat-round" data-chat="current-chat">
+            <div class="chat-answers-card-wrap" data-chat-answers-wrap="current-answer">
+              <div class="answer-text md-text-card">
+                <div class="qk-markdown">Visible current answer</div>
+              </div>
+              <div data-answer-feedback-toolbar>
+                <button aria-label="复制回复">copy</button>
+              </div>
+            </div>
+          </section>
+        `,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        captureSource: "native-copy",
+        markdown: expect.stringContaining("official answer action"),
+      });
+      expect(nativeCopy.capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          button: document.querySelector("[data-answer-feedback-toolbar] button"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails safely instead of switching composers when the bound node is replaced", async () => {
     document.body.innerHTML = `
       <section class="chat-composer">

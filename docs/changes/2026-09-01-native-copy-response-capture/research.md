@@ -68,6 +68,12 @@
 
 对本 change 的启示是：最终“复制导出到用户剪贴板”仍需保留现有 fallback；但捕获站点原生 Copy 时不能先让真实写入发生再尝试恢复旧剪贴板，因为 clipboard read 权限和用户授权并不稳定。更安全的方式是在 patch 中截获并抑制系统写入。
 
+### 2.5 OpenCLI：provider 适配必须独立维护并允许 selector 漂移
+
+[OpenCLI 的豆包 browser adapter](https://github.com/partme-ai/opencli/blob/main/docs/adapters/browser/doubao.md) 把 `status`、`send`、`read`、`ask` 和历史能力作为站点专属 adapter 维护，并明确 `ask` 依赖 DOM polling。其当前实现与公开适配资料还提供了豆包新版消息容器线索，例如 `union_message`、`message-block-container` 和 `md-box-root`。
+
+本项目据此不把豆包、Kimi、DeepSeek 或通义千问的消息/按钮 selector 放入 core；每个站点独立枚举 assistant turn、排除代码 Copy，并可单独回滚。DOM polling 只作为一种信号，不能在官网专属 Copy 已出现后继续无限等待。
+
 ## 3. DOM、Shadow DOM 与 iframe 边界
 
 [Defuddle](https://github.com/kepano/defuddle/blob/197db78742ad0fb91100c2b478f5350ee9d8702c/src/defuddle.ts) 先克隆 document，再把 open Shadow DOM 展平；isolated world 不能直接读取时，需要 MAIN-world 脚本预先桥接内容。[SingleFile](https://github.com/gildas-lormeau/SingleFile) 则在 [manifest.json](https://github.com/gildas-lormeau/SingleFile/blob/517fb7c5cf2096d89933b747e862d8ecf616a9f9/manifest.json) 中以 `all_frames`、`document_start`、`match_about_blank` 和 MAIN world hook 覆盖 frame；[single-file-hooks-frames.js](https://github.com/gildas-lormeau/SingleFile/blob/517fb7c5cf2096d89933b747e862d8ecf616a9f9/lib/single-file-hooks-frames.js) 还会包装 `attachShadow` 保存 closed root 引用。

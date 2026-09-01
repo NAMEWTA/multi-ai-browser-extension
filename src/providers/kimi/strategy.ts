@@ -9,9 +9,12 @@ import {
 } from "../../core/providers/dom";
 import { ProviderError } from "../../core/providers/errors";
 import { kimiDefinition } from "./definition";
+import { kimiNativeCopyAdapter } from "./native-copy";
 import { kimiSelectors } from "./selectors";
 
 export class KimiStrategy extends BaseDomStrategy {
+  protected override readonly nativeCopyAdapter = kimiNativeCopyAdapter;
+
   constructor() {
     super(kimiDefinition, kimiSelectors);
   }

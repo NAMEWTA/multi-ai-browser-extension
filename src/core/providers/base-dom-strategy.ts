@@ -1,6 +1,7 @@
 import type {
   FrameContext,
   NativeCopyAdapter,
+  NativeCopyTarget,
   ProbeResult,
   PromptPayload,
   ProviderDefinition,
@@ -20,7 +21,7 @@ import {
   waitForResolvedElement,
 } from "./dom";
 import { ProviderError } from "./errors";
-import { captureNativeResponse } from "./native-copy";
+import { captureNativeResponse, captureNativeTarget } from "./native-copy";
 import { readResponseContent, type ResponseContentSnapshot } from "./response-content";
 import { ButtonSubmitter } from "./submitters/button-submitter";
 import { CompositeComposerWriter } from "./writers/composer-writer";
@@ -74,7 +75,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       throw new ProviderError("PROVIDER_BUSY", "官网仍在生成上一条回复，请等待完成后重试");
     }
     this.activeComposer = composer;
-    return this.responseBaseline(ctx.document);
+    return this.responseBaseline(ctx.document, ctx);
   }
 
   async writePrompt(ctx: FrameContext, prompt: PromptPayload): Promise<void> {
@@ -156,6 +157,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     ctx: FrameContext,
     baseline: ResponseBaseline,
     onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
+    prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate> {
     if (!this.selectors.responses?.length && !this.selectors.responseCapture?.turnTiers.length) {
       return {
@@ -170,19 +172,26 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     const pollMs = this.selectors.responsePollMs ?? 1_000;
     const startedAt = Date.now();
     const baselineKeys = new Set(baseline.keys ?? []);
-    const baselineEntries = new Map(
-      (baseline.entries ?? []).map(({ key, text }) => [key, text] as const),
-    );
     const baselineFallbackTexts = new Set(
       (baseline.entries ?? [])
         .filter(({ key, text }) => key.startsWith("index:") && Boolean(text))
         .map(({ text }) => text),
+    );
+    const baselineElements = new Set(baseline.elements ?? []);
+    const baselineElementKeys = new Map(
+      (baseline.elements ?? []).map(
+        (element, index) => [element, baseline.entries?.[index]?.key] as const,
+      ),
     );
     const responseSnapshots = (document: Document) => this.responseSnapshots(document);
     const responseGenerating = (document: Document, response: HTMLElement) =>
       this.isResponseGenerating(document, response);
     const responseInterrupted = (document: Document, response: HTMLElement) =>
       this.isResponseInterrupted(document, response);
+    const anyResponseGenerating = (document: Document) =>
+      this.selectors.generating
+        ? Boolean(findFirstUsable(document, this.selectors.generating))
+        : false;
     const findBlocked = (document: Document) => this.findBlocked(document);
     const nativeCopyAdapter = this.nativeCopyAdapter;
     const nativeCopyReady = (response: HTMLElement) => {
@@ -208,7 +217,12 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       let generatingStoppedAt: number | undefined;
       let scheduledCheck: number | undefined;
       let quietTimer: number | undefined;
+      let quietCheckAt: number | undefined;
       let terminalFingerprint: string | undefined;
+      let nativeTerminalFingerprint: string | undefined;
+      let nativeTerminalObservedAt: number | undefined;
+      let nativeCopyAttempted = false;
+      let generationReported = false;
 
       const observer = new MutationObserver(() => scheduleCheck());
       const poll = ctx.window.setInterval(() => scheduleCheck(), pollMs);
@@ -275,14 +289,18 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       }
 
       function scheduleQuietCheck(delayMs: number): void {
+        const normalizedDelay = Math.max(0, delayMs);
+        const requestedAt = Date.now() + normalizedDelay;
+        if (quietTimer !== undefined && quietCheckAt !== undefined && quietCheckAt <= requestedAt) {
+          return;
+        }
         if (quietTimer !== undefined) ctx.window.clearTimeout(quietTimer);
-        quietTimer = ctx.window.setTimeout(
-          () => {
-            quietTimer = undefined;
-            scheduleCheck();
-          },
-          Math.max(0, delayMs),
-        );
+        quietCheckAt = requestedAt;
+        quietTimer = ctx.window.setTimeout(() => {
+          quietTimer = undefined;
+          quietCheckAt = undefined;
+          scheduleCheck();
+        }, normalizedDelay);
       }
 
       async function runCheck(): Promise<void> {
@@ -293,6 +311,75 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           const snapshots = responseSnapshots(ctx.document);
           const selected = selectResponseSnapshot(snapshots);
           const now = Date.now();
+          const nativeTarget = selectNativeCopyTarget(
+            nativeCopyAdapter,
+            ctx,
+            baseline,
+            prompt?.text,
+          );
+
+          if (
+            nativeTarget &&
+            !nativeCopyAttempted &&
+            nativeCopyAdapter?.isTerminalTarget?.(ctx, nativeTarget) === true
+          ) {
+            const fingerprint = nativeCopyTargetFingerprint(nativeTarget);
+            const stableFor =
+              nativeTerminalFingerprint === fingerprint && nativeTerminalObservedAt !== undefined
+                ? now - nativeTerminalObservedAt
+                : 0;
+            if (stableFor >= 250) {
+              nativeCopyAttempted = true;
+              const targetSnapshot = bestResponseSnapshot(
+                snapshots.filter((snapshot) =>
+                  responseContains(nativeTarget.response, snapshot.element),
+                ),
+              );
+              const native = await captureNativeTarget(
+                nativeCopyAdapter,
+                ctx,
+                nativeTarget,
+                targetSnapshot,
+                prompt,
+              ).catch(() => undefined);
+              if (native) {
+                finish(native);
+                return;
+              }
+              if (!nativeTarget.response.isConnected || !nativeTarget.button.isConnected) {
+                nativeCopyAttempted = false;
+                nativeTerminalFingerprint = undefined;
+                nativeTerminalObservedAt = undefined;
+                scheduleQuietCheck(250);
+                return;
+              }
+              if (targetSnapshot?.text) {
+                finish({
+                  status: "partial",
+                  terminalReason: "uncertain-final",
+                  text: targetSnapshot.text,
+                  markdown: targetSnapshot.markdown,
+                  captureSource: "dom",
+                  message: "官网回复已结束，但原生复制失败，已保存当前可见内容",
+                });
+              } else {
+                finish({
+                  status: "failed",
+                  terminalReason: "failed",
+                  message: "官网回复已结束，但未能从该回复的复制按钮取得内容",
+                });
+              }
+              return;
+            }
+            if (nativeTerminalFingerprint !== fingerprint) {
+              nativeTerminalFingerprint = fingerprint;
+              nativeTerminalObservedAt = now;
+            }
+            scheduleQuietCheck(250 - stableFor);
+          } else if (!nativeCopyAttempted) {
+            nativeTerminalFingerprint = undefined;
+            nativeTerminalObservedAt = undefined;
+          }
 
           if (selected) {
             selectedTurnKey = selected.key;
@@ -321,6 +408,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
             const generating = responseGenerating(ctx.document, selected.element);
             if (generating) {
               generatingSeen = true;
+              generationReported = true;
               generatingStoppedAt = undefined;
               terminalFingerprint = undefined;
             } else if (generatingSeen && generatingStoppedAt === undefined) {
@@ -382,6 +470,9 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
                 }
               }
             }
+          } else if (!generationReported && anyResponseGenerating(ctx.document)) {
+            generationReported = true;
+            await onUpdate({ status: "streaming" });
           }
 
           if (findBlocked(ctx.document)) {
@@ -435,7 +526,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
         text: string,
         markdown: string,
       ): Promise<ResponseCaptureUpdate> {
-        const native = await captureNativeResponse(nativeCopyAdapter, ctx, snapshot).catch(
+        const native = await captureNativeResponse(nativeCopyAdapter, ctx, snapshot, prompt).catch(
           () => undefined,
         );
         if (native) return { ...native, status, terminalReason };
@@ -453,23 +544,25 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           selectedTurnKey = undefined;
         }
         const added = snapshots.filter((snapshot) => {
+          const previousElementKey = baselineElementKeys.get(snapshot.element);
+          if (
+            baselineElements.has(snapshot.element) &&
+            (previousElementKey === undefined ||
+              previousElementKey === snapshot.key ||
+              previousElementKey.startsWith("index:") ||
+              snapshot.key.startsWith("index:"))
+          ) {
+            return false;
+          }
           if (baselineKeys.has(snapshot.key)) {
-            return baselineEntries.get(snapshot.key) !== snapshot.text;
+            if (!snapshot.key.startsWith("index:")) return false;
+            return !baselineFallbackTexts.has(snapshot.text);
           }
           return !(snapshot.key.startsWith("index:") && baselineFallbackTexts.has(snapshot.text));
         });
         if (added.length) {
           const lastKey = added.at(-1)!.key;
           return bestResponseSnapshot(added.filter((snapshot) => snapshot.key === lastKey));
-        }
-        const last = snapshots.at(-1);
-        if (
-          last &&
-          (snapshots.length > baseline.count ||
-            last.text !== baseline.lastText ||
-            (baseline.lastKey !== undefined && last.key !== baseline.lastKey))
-        ) {
-          return last;
         }
         return undefined;
       }
@@ -502,10 +595,31 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   async finalizeResponse(
     ctx: FrameContext,
     baseline: ResponseBaseline,
+    prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate | undefined> {
-    const snapshot = selectSnapshotAfterBaseline(this.responseSnapshots(ctx.document), baseline);
+    const snapshots = this.responseSnapshots(ctx.document);
+    const nativeTarget = selectNativeCopyTarget(
+      this.nativeCopyAdapter,
+      ctx,
+      baseline,
+      prompt?.text,
+    );
+    if (nativeTarget && this.nativeCopyAdapter?.isTerminalTarget?.(ctx, nativeTarget) === true) {
+      const targetSnapshot = bestResponseSnapshot(
+        snapshots.filter((snapshot) => responseContains(nativeTarget.response, snapshot.element)),
+      );
+      const native = await captureNativeTarget(
+        this.nativeCopyAdapter,
+        ctx,
+        nativeTarget,
+        targetSnapshot,
+        prompt,
+      ).catch(() => undefined);
+      if (native) return native;
+    }
+    const snapshot = selectSnapshotAfterBaseline(snapshots, baseline);
     if (!snapshot?.text) return undefined;
-    const native = await captureNativeResponse(this.nativeCopyAdapter, ctx, snapshot).catch(
+    const native = await captureNativeResponse(this.nativeCopyAdapter, ctx, snapshot, prompt).catch(
       () => undefined,
     );
     if (native) return native;
@@ -568,15 +682,21 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     });
   }
 
-  protected responseBaseline(document: Document): ResponseBaseline {
+  protected responseBaseline(document: Document, ctx?: FrameContext): ResponseBaseline {
     const responses = this.responseSnapshots(document);
     const last = responses.at(-1);
+    const nativeCopyTargets =
+      ctx && this.nativeCopyAdapter?.listTargets
+        ? [...this.nativeCopyAdapter.listTargets(ctx)]
+        : [];
     return {
       count: responses.length,
       lastText: last?.text ?? "",
       ...(responses.length ? { keys: responses.map((response) => response.key) } : {}),
       ...(last ? { lastKey: last.key } : {}),
       ...(responses.length ? { entries: responses.map(({ key, text }) => ({ key, text })) } : {}),
+      ...(responses.length ? { elements: responses.map(({ element }) => element) } : {}),
+      ...(nativeCopyTargets.length ? { nativeCopyTargets } : {}),
     };
   }
 
@@ -636,17 +756,84 @@ function selectSnapshotAfterBaseline(
   baseline: ResponseBaseline,
 ): ResponseContentSnapshot | undefined {
   const keys = new Set(baseline.keys ?? []);
-  const entries = new Map((baseline.entries ?? []).map(({ key, text }) => [key, text] as const));
-  const added = snapshots.filter(
-    (snapshot) => !keys.has(snapshot.key) || entries.get(snapshot.key) !== snapshot.text,
+  const elements = new Set(baseline.elements ?? []);
+  const elementKeys = new Map(
+    (baseline.elements ?? []).map(
+      (element, index) => [element, baseline.entries?.[index]?.key] as const,
+    ),
   );
+  const fallbackTexts = new Set(
+    (baseline.entries ?? [])
+      .filter(({ key, text }) => key.startsWith("index:") && Boolean(text))
+      .map(({ text }) => text),
+  );
+  const added = snapshots.filter((snapshot) => {
+    const previousElementKey = elementKeys.get(snapshot.element);
+    if (
+      elements.has(snapshot.element) &&
+      (previousElementKey === undefined ||
+        previousElementKey === snapshot.key ||
+        previousElementKey.startsWith("index:") ||
+        snapshot.key.startsWith("index:"))
+    ) {
+      return false;
+    }
+    if (!keys.has(snapshot.key)) {
+      return !(snapshot.key.startsWith("index:") && fallbackTexts.has(snapshot.text));
+    }
+    return snapshot.key.startsWith("index:") && !fallbackTexts.has(snapshot.text);
+  });
   if (added.length) {
     const lastKey = added.at(-1)!.key;
     return bestResponseSnapshot(added.filter((snapshot) => snapshot.key === lastKey));
   }
-  const last = snapshots.at(-1);
-  if (!last) return undefined;
-  return snapshots.length > baseline.count || last.text !== baseline.lastText ? last : undefined;
+  return undefined;
+}
+
+function selectNativeCopyTarget(
+  adapter: NativeCopyAdapter | undefined,
+  ctx: FrameContext,
+  baseline: ResponseBaseline,
+  prompt?: string,
+): NativeCopyTarget | undefined {
+  if (!adapter?.listTargets || !ctx.nativeCopy) return undefined;
+  const baselineTargets = baseline.nativeCopyTargets ?? [];
+  const baselineKeys = new Set(baselineTargets.map(({ key }) => key));
+  const targets = [...adapter.listTargets(ctx)].filter((target) => !baselineKeys.has(target.key));
+  if (!targets.length) return undefined;
+  return (
+    adapter.selectTarget?.(ctx, targets, { baseline, ...(prompt ? { prompt } : {}) }) ??
+    targets.at(-1)
+  );
+}
+
+const nativeCopyElementIds = new WeakMap<HTMLElement, number>();
+let nextNativeCopyElementId = 1;
+
+function nativeCopyTargetFingerprint(target: NativeCopyTarget): string {
+  const content = (target.response.textContent ?? "").replace(/\s+/g, " ").trim();
+  return `${target.key}\u0000${nativeCopyElementId(target.response)}\u0000${nativeCopyElementId(target.button)}\u0000${textFingerprint(content)}`;
+}
+
+function nativeCopyElementId(element: HTMLElement): number {
+  const existing = nativeCopyElementIds.get(element);
+  if (existing !== undefined) return existing;
+  const id = nextNativeCopyElementId++;
+  nativeCopyElementIds.set(element, id);
+  return id;
+}
+
+function textFingerprint(value: string): string {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `${value.length}:${hash >>> 0}`;
+}
+
+function responseContains(response: HTMLElement, candidate: HTMLElement): boolean {
+  return response === candidate || response.contains(candidate) || candidate.contains(response);
 }
 
 function responseCaptureUpdateFromAbortReason(reason: unknown): ResponseCaptureUpdate | undefined {

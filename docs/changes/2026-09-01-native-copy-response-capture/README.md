@@ -1,6 +1,6 @@
 # 原生 Copy 终态回复采集
 
-状态：代码与自动化测试已接入，待真实登录站点灰度验收
+状态：Copy-first v2 已实现并通过自动化测试，待真实登录站点灰度验收
 
 日期：2026-09-01
 
@@ -13,7 +13,7 @@ DOM 采集已经能持续保存流式预览，但部分 AI 官网会把最终回
 ## 核心决策
 
 1. DOM 采集仍是 waiting、streaming 和 partial checkpoint 的主通道。
-2. 原生 Copy 只在当前 assistant turn 已具备终态证据后执行一次，不能参与逐 token 采集。
+2. 原生 Copy 只在当前 assistant turn 已具备终态证据后执行一次，不能参与逐 token 采集。终态证据可由 provider 的“新轮次身份 + 当前回复专属 Copy + 无生成中信号 + 250ms 双观察稳定”提供，不再强制依赖正文 selector 先成功。
 3. 捕获必须在页面 MAIN world 的 `document_start` 安装默认透传 wrapper；只有短时 armed 窗口拦截 `navigator.clipboard.writeText` 和 `navigator.clipboard.write`，页面卸载或显式 uninstall 时恢复原方法。
 4. provider 只负责定位当前轮 Copy 按钮、判断按钮是否就绪以及规范化站点输出；通用 core 不保存站点 selector。
 5. 成功且通过完整性校验的原生结果是该轮终态正文的权威版本；捕获失败时回退现有 DOM 终态或 partial，不把失败伪装成 completed。
@@ -42,6 +42,7 @@ DOM 采集已经能持续保存流式预览，但部分 AI 官网会把最终回
 - [design.md](./design.md)：终态权威模型、MAIN-world bridge、provider 目录和降级设计。
 - [implementation-plan.md](./implementation-plan.md)：按风险拆分的文件级实施顺序。
 - [acceptance.md](./acceptance.md)：自动化、真实站点、隐私和回滚验收矩阵。
+- [execution.md](./execution.md)：Copy-first v2 的实际落地范围、故障修复和验证结果。
 
 ## 与相邻 change 的关系
 

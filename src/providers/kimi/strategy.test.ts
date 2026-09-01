@@ -180,4 +180,66 @@ describe("KimiStrategy", () => {
       vi.useRealTimers();
     }
   });
+
+  it("ignores a mutated old turn and copies only the current Kimi reply", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
+          <article class="chat-content-item-user" data-message-id="user-old">old prompt</article>
+          <article class="chat-content-item-assistant" data-message-id="assistant-old">
+            <div class="segment-content">
+              <div class="markdown">Old answer<div class="capacity-banner">capacity notice</div></div>
+            </div>
+            <button aria-label="复制">copy old</button>
+          </article>
+        `,
+      );
+      const strategy = new KimiStrategy();
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "## Current Kimi answer\n\nThis belongs to the current prompt.",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, timeoutMs: 100, responseTimeoutMs: 3_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(ctx, baseline, updates, {
+        text: "current prompt",
+      });
+
+      document.querySelector(".capacity-banner")?.remove();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updates).not.toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("Old answer") }),
+      );
+
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
+          <article class="chat-content-item-user" data-message-id="user-current">current prompt</article>
+          <article class="chat-content-item-assistant" data-message-id="assistant-current">
+            <div class="segment-content"><div class="markdown">Visible current answer</div></div>
+            <button><svg name="Copy"></svg></button>
+          </article>
+        `,
+      );
+      await vi.advanceTimersByTimeAsync(300);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        captureSource: "native-copy",
+        markdown: expect.stringContaining("Current Kimi answer"),
+      });
+      expect(nativeCopy.capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          button: document.querySelector("[data-message-id='assistant-current'] button"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

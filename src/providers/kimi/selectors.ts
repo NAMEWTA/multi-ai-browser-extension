@@ -1,5 +1,34 @@
 import type { ProviderSelectors } from "../../core/providers/contracts";
 
+export const kimiNativeCopySelectors = {
+  turn: [
+    "[data-message-id][class*='chat-content-item-assistant']",
+    "[class*='chat-content-item-assistant']",
+    "[data-role='assistant']",
+    "[class*='segment-assistant']",
+  ],
+  userTurn: [
+    "[data-message-id][class*='chat-content-item-user']",
+    "[class*='chat-content-item-user']",
+    "[data-role='user']",
+    "[class*='segment-user']",
+  ],
+  copy: [
+    "button[data-testid*='copy' i]",
+    "[role='button'][data-testid*='copy' i]",
+    "button[aria-label*='复制']",
+    "[role='button'][aria-label*='复制']",
+    "button[aria-label*='copy' i]",
+    "[role='button'][aria-label*='copy' i]",
+    "button[title*='复制']",
+    "[role='button'][title*='复制']",
+    "button[title*='copy' i]",
+    "[role='button'][title*='copy' i]",
+    "button:has(svg[name='Copy'])",
+    "[role='button']:has(svg[name='Copy'])",
+  ],
+} as const;
+
 export const kimiSelectors = {
   composer: [
     "div.chat-input-editor[contenteditable='true'][data-lexical-editor='true']",

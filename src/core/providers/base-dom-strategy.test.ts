@@ -69,6 +69,30 @@ class NativePlannedCaptureStrategy extends BaseDomStrategy {
   }
 }
 
+class NativeTargetOnlyStrategy extends BaseDomStrategy {
+  protected override readonly nativeCopyAdapter = {
+    id: "test-target-only-native-copy",
+    capturePolicy: { maxAttempts: 2, requireDomEndingAnchor: false },
+    locateCopyButton: (_ctx: unknown, response: HTMLElement) =>
+      response.querySelector<HTMLElement>(".copy") ?? undefined,
+    listTargets: (ctx: { document: Document }) =>
+      [...ctx.document.querySelectorAll<HTMLElement>(".copy-turn")].flatMap((response) => {
+        const button = response.querySelector<HTMLElement>(".copy");
+        return button ? [{ key: response.dataset.turnId ?? "anonymous", response, button }] : [];
+      }),
+    isTerminalTarget: () => true,
+  };
+
+  constructor() {
+    super(definition, {
+      composer: ["#composer"],
+      submit: ["#send"],
+      responses: [".selector-that-does-not-match-the-copy-turn"],
+      responsePollMs: 20,
+    });
+  }
+}
+
 describe("BaseDomStrategy", () => {
   it("reports a website login state", async () => {
     document.body.innerHTML = '<a id="login">Login</a>';
@@ -335,6 +359,119 @@ describe("BaseDomStrategy", () => {
         markdown: "# Complete native answer",
       });
       expect(nativeCopy.capture).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("captures a terminal native-copy target when no response content selector matches", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea><button id="send"></button>';
+      const strategy = new NativeTargetOnlyStrategy();
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "# Full provider answer\n\nEnding from the official copy action.",
+          mimeType: "text/markdown" as const,
+        }),
+      };
+      const ctx = { document, window, nativeCopy, responseTimeoutMs: 3_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      const capture = strategy.captureResponse(ctx, baseline, vi.fn(), { text: "current prompt" });
+
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        '<article class="copy-turn" data-turn-id="current"><button class="copy">copy</button></article>',
+      );
+      await vi.advanceTimersByTimeAsync(300);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        captureSource: "native-copy",
+        markdown: expect.stringContaining("official copy action"),
+      });
+      expect(nativeCopy.capture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          button: document.querySelector(".copy-turn .copy"),
+          suppressSystemClipboard: true,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rebinds a native-copy target that React replaces during the first capture attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea><button id="send"></button>';
+      const strategy = new NativeTargetOnlyStrategy();
+      const nativeCopy = {
+        capture: vi
+          .fn()
+          .mockImplementationOnce(async () => {
+            document.querySelector(".copy-turn")?.remove();
+            document.body.insertAdjacentHTML(
+              "beforeend",
+              '<article class="copy-turn" data-turn-id="current"><button class="copy">replacement</button></article>',
+            );
+            throw new Error("target replaced");
+          })
+          .mockResolvedValueOnce({
+            text: "Complete answer from the rebound target",
+            mimeType: "text/plain" as const,
+          }),
+      };
+      const ctx = { document, window, nativeCopy, responseTimeoutMs: 3_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      const capture = strategy.captureResponse(ctx, baseline, vi.fn());
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        '<article class="copy-turn" data-turn-id="current"><button class="copy">first</button></article>',
+      );
+
+      await vi.advanceTimersByTimeAsync(700);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        captureSource: "native-copy",
+        text: "Complete answer from the rebound target",
+      });
+      expect(nativeCopy.capture).toHaveBeenCalledTimes(2);
+      expect(nativeCopy.capture).toHaveBeenLastCalledWith(
+        expect.objectContaining({ button: document.querySelector(".copy-turn .copy") }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never reclassifies a mutated baseline response as the current answer", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <textarea id="composer"></textarea>
+        <div class="assistant-response">Old answer with a temporary capacity banner</div>
+      `;
+      const strategy = new TestStrategy();
+      const baseline = await strategy.prepareSubmit({ document, window, timeoutMs: 10 });
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(
+        { document, window, responseTimeoutMs: 500 },
+        baseline,
+        updates,
+      );
+
+      document.querySelector<HTMLElement>(".assistant-response")!.textContent = "Old answer";
+      await vi.advanceTimersByTimeAsync(501);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "timeout",
+        terminalReason: "timeout",
+      });
+      expect(updates).not.toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("Old answer") }),
+      );
     } finally {
       vi.useRealTimers();
     }

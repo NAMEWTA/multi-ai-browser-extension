@@ -1,5 +1,40 @@
 import type { ProviderSelectors } from "../../core/providers/contracts";
 
+export const qwenNativeCopySelectors = {
+  turn: [
+    ".chat-round[data-chat]",
+    "[data-chat-answers-wrap].chat-answers-card-wrap",
+    "[data-chat-answers-wrap]",
+    "div[id^='chat-response-message-']",
+    "[data-role='assistant']",
+    ".assistant-response",
+  ],
+  action: [
+    "[data-answer-feedback-toolbar]",
+    "[class*='answer-feedback' i]",
+    "[class*='message-action' i]",
+    "[class*='action-bar' i]",
+    "[class*='toolbar' i]",
+    "[class*='operation' i]",
+  ],
+  copy: [
+    "button[data-testid*='copy' i]",
+    "[role='button'][data-testid*='copy' i]",
+    "button[aria-label*='复制']",
+    "[role='button'][aria-label*='复制']",
+    "button[aria-label*='copy' i]",
+    "[role='button'][aria-label*='copy' i]",
+    "button[title*='复制']",
+    "[role='button'][title*='复制']",
+    "button[title*='copy' i]",
+    "[role='button'][title*='copy' i]",
+    "button:has([class*='copy' i])",
+    "[role='button']:has([class*='copy' i])",
+    "button:has(svg use[href*='copy' i])",
+    "[role='button']:has(svg use[href*='copy' i])",
+  ],
+} as const;
+
 export const qwenSelectors = {
   composer: [
     "[data-chat-input-shell='true'] textarea",

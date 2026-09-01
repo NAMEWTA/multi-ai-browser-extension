@@ -7,9 +7,12 @@ import {
   readComposerValue,
 } from "../../core/providers/dom";
 import { qwenDefinition } from "./definition";
+import { qwenNativeCopyAdapter } from "./native-copy";
 import { qwenSelectors } from "./selectors";
 
 export class QwenStrategy extends BaseDomStrategy {
+  protected override readonly nativeCopyAdapter = qwenNativeCopyAdapter;
+
   constructor() {
     super(qwenDefinition, qwenSelectors);
   }

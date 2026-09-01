@@ -120,8 +120,11 @@ export default defineContentScript({
         reportResponse(command, update, captureId, ++revision);
       try {
         await report({ status: "waiting" });
-        const final = await strategy.captureResponse({ ...ctx, signal }, baseline, (update) =>
-          report(update),
+        const final = await strategy.captureResponse(
+          { ...ctx, signal },
+          baseline,
+          (update) => report(update),
+          { text: command.prompt },
         );
         await report(final);
       } catch (error) {
@@ -149,7 +152,9 @@ export default defineContentScript({
         turnId: command.turnId,
         controller,
         completion: Promise.resolve(),
-        finalize: () => strategy.finalizeResponse?.(ctx, baseline) ?? Promise.resolve(undefined),
+        finalize: () =>
+          strategy.finalizeResponse?.(ctx, baseline, { text: command.prompt }) ??
+          Promise.resolve(undefined),
       };
       capture.completion = captureResponse(command, baseline, controller.signal).finally(() => {
         if (activeCapture === capture) activeCapture = undefined;

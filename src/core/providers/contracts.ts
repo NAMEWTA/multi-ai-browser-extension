@@ -84,6 +84,8 @@ export interface ResponseBaseline {
   readonly keys?: readonly string[];
   readonly lastKey?: string;
   readonly entries?: readonly ResponseBaselineEntry[];
+  readonly elements?: readonly HTMLElement[];
+  readonly nativeCopyTargets?: readonly NativeCopyTarget[];
 }
 
 export interface ResponseBaselineEntry {
@@ -129,11 +131,36 @@ export interface NativeCopyContext {
   readonly turnKey: string;
   readonly domText: string;
   readonly domMarkdown: string;
+  readonly prompt?: string;
+}
+
+export interface NativeCopyTarget {
+  readonly key: string;
+  readonly response: HTMLElement;
+  readonly button: HTMLElement;
+}
+
+export interface NativeCopyTargetSelectionContext {
+  readonly baseline: ResponseBaseline;
+  readonly prompt?: string;
+}
+
+export interface NativeCopyCapturePolicy {
+  readonly maxAttempts?: number;
+  readonly requireDomEndingAnchor?: boolean;
 }
 
 export interface NativeCopyAdapter {
   readonly id: string;
+  readonly capturePolicy?: NativeCopyCapturePolicy;
   locateCopyButton(ctx: FrameContext, response: HTMLElement): HTMLElement | undefined;
+  listTargets?(ctx: FrameContext): readonly NativeCopyTarget[];
+  selectTarget?(
+    ctx: FrameContext,
+    targets: readonly NativeCopyTarget[],
+    context: NativeCopyTargetSelectionContext,
+  ): NativeCopyTarget | undefined;
+  isTerminalTarget?(ctx: FrameContext, target: NativeCopyTarget): boolean;
   prepareCopy?(
     ctx: FrameContext,
     response: HTMLElement,
@@ -178,10 +205,12 @@ export interface ProviderStrategy {
     ctx: FrameContext,
     baseline: ResponseBaseline,
     onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
+    prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate>;
   finalizeResponse?(
     ctx: FrameContext,
     baseline: ResponseBaseline,
+    prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate | undefined>;
   startNewConversation(ctx: FrameContext): Promise<void>;
   diagnoseComposerCandidates?(ctx: FrameContext): readonly ComposerCandidateDiagnostic[];

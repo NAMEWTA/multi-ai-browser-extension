@@ -25,14 +25,18 @@ DOM 通道持续工作，原生 Copy 不参与逐 token 更新。这样可以同
 
 ### 1.2 权威性的含义
 
-“权威”只表示站点原生 Copy 是该轮最终内容的首选序列化结果，不表示它能单独证明生成已经完成。调用前仍需满足现有终态状态机：
+“权威”表示站点原生 Copy 是该轮最终内容的首选序列化结果。v2 允许 provider 的原生 Copy 目标本身参与证明终态，但必须同时满足：
 
 - 当前 assistant turn 已从 baseline 后产生或发生可证明的本轮更新。
-- canonical/final container 已存在。
-- generating 曾结束，或 provider 的组合终态证据成立。
-- final re-read 已得到稳定 DOM snapshot。
+- Copy 按钮严格归属于该 assistant turn，不是用户消息或代码块按钮。
+- generating 信号不存在，且同一 turn/button 节点连续两次观察稳定至少 250ms。
+- turn key 和活 DOM 节点均未落入提交前 baseline。
+
+canonical/final DOM container 仍是优先的流式与降级证据，但不再是启动原生 Copy 的硬前置条件。否则正文 selector 一旦漂移，原生 Copy 也无法救援，系统会重现“官网已经完整回复、扩展仍等待或只保存标题”的故障。
 
 若按钮仍未就绪、捕获超时、输出为空或完整性校验失败，原生通道不得把状态从 partial/uncertain-final 提升为 completed。
+
+当 provider 已证明 Copy 目标终态但捕获失败时，状态必须立即收敛：有该轮 DOM 正文则保存为 `partial`，无正文则标记 `failed`。不得继续维持 `waiting` 直到十分钟总超时。
 
 ## 2. 契约
 

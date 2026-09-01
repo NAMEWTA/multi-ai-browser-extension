@@ -37,4 +37,25 @@ describe("doubaoNativeCopyAdapter", () => {
 
     expect(hovered).toHaveBeenCalled();
   });
+
+  it("discovers the current Doubao message container and its official copy action", () => {
+    document.body.innerHTML = `
+      <section data-testid="union_message" data-message-id="doubao-current">
+        <div data-testid="message-block-container">
+          <div class="md-box-root"><h2>Current answer</h2><p>Complete body</p></div>
+        </div>
+        <div class="message-actions">
+          <button type="button"><svg name="Copy"></svg></button>
+        </div>
+      </section>
+    `;
+
+    expect(doubaoNativeCopyAdapter.listTargets?.({ document, window })).toEqual([
+      expect.objectContaining({
+        key: "doubao-copy:doubao-current",
+        response: document.querySelector("[data-testid='union_message']"),
+        button: document.querySelector("button"),
+      }),
+    ]);
+  });
 });
