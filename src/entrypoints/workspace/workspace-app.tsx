@@ -776,7 +776,7 @@ export function WorkspaceApp() {
         </section>
 
         <main className="panel-stage">
-          {!runtimeReady || !hydrated ? (
+          {!runtimeReady || !hydrated || !activeSessionId ? (
             <div className="empty-workspace" aria-live="polite">
               <RefreshCw className="spin" size={24} />
               <strong>正在准备真实网页</strong>
@@ -1248,7 +1248,7 @@ function ProviderViewport({
         src={initialUrl}
         title={`${providerName} 网页`}
         allow="clipboard-read; clipboard-write"
-        onLoad={() => window.setTimeout(onConnectionTimeout, 10_000)}
+        onLoad={() => window.setTimeout(onConnectionTimeout, 20_000)}
       />
     </div>
   );

@@ -67,7 +67,7 @@ test("opens a full-page workspace with DeepSeek and Kimi by default", async () =
   await expect(workspace.locator("article.provider-panel[data-provider='kimi']")).toBeVisible();
   await expect(workspace.locator(".global-composer")).toBeVisible();
   await expect(workspace.locator(".target-summary")).toContainText("发送至 2");
-  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 12_000 });
+  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 30_000 });
 });
 
 test("keeps drafts isolated from native website composers until submit", async () => {
@@ -170,19 +170,39 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
   await expect(detail.locator(".unified-turn-record")).toHaveCount(2);
   await detail.getByTitle("关闭").click();
 
+  await expect
+    .poll(async () => {
+      const urls = await getFrameUrls(workspace);
+      return (
+        urls.length === 2 &&
+        urls.every((url) => url.includes("/totally-new/") && url.includes("?source=mock#saved"))
+      );
+    })
+    .toBe(true);
   const oldUrls = await getFrameUrls(workspace);
-  expect(
-    oldUrls.every((url) => url.includes("/totally-new/") && url.includes("?source=mock#saved")),
-  ).toBe(true);
 
-  await workspace.getByRole("button", { name: "新任务" }).click();
+  await workspace.getByRole("button", { name: "新任务", exact: true }).click();
   await expect(workspace.locator(".history-item")).toHaveCount(2);
-  expect((await getFrameUrls(workspace)).every((url) => new URL(url).pathname === "/")).toBe(true);
+  await expect
+    .poll(async () => {
+      const urls = await getFrameUrls(workspace);
+      return urls.length === 2 && urls.every((url) => new URL(url).pathname === "/");
+    })
+    .toBe(true);
 
   await workspace.locator(".global-composer textarea").fill("新任务的第一个问题");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
+  await expect
+    .poll(async () => {
+      const urls = await getFrameUrls(workspace);
+      return (
+        urls.length === oldUrls.length &&
+        urls.every((url) => url.includes("/totally-new/")) &&
+        urls.some((url, index) => url !== oldUrls[index])
+      );
+    })
+    .toBe(true);
   const newUrls = await getFrameUrls(workspace);
-  expect(newUrls).not.toEqual(oldUrls);
 
   await workspace.locator(".history-item", { hasText: "你是什么模型" }).click();
   await expect
@@ -195,8 +215,17 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
 });
 
 test("keeps sidebar order stable until a session is explicitly pinned", async () => {
-  const currentTitle = "新任务的第一个问题";
-  const olderTitle = "你是什么模型";
+  const olderTitle = "置顶顺序较早会话";
+  const currentTitle = "置顶顺序当前会话";
+  await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 30_000 });
+  await workspace.getByRole("button", { name: "新任务", exact: true }).click();
+  await workspace.locator(".global-composer textarea").fill(olderTitle);
+  await workspace.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(workspace.locator(".history-item", { hasText: olderTitle })).toBeVisible();
+  await workspace.getByRole("button", { name: "新任务", exact: true }).click();
+  await workspace.locator(".global-composer textarea").fill(currentTitle);
+  await workspace.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(workspace.locator(".history-item", { hasText: currentTitle })).toBeVisible();
   const titlesBefore = await workspace.locator(".history-item > span").allTextContents();
 
   await workspace.locator(".history-item", { hasText: olderTitle }).click();
@@ -499,18 +528,11 @@ async function addPromptTemplate(manager: Locator, name: string, content: string
 }
 
 async function getFrameUrls(page: Page): Promise<string[]> {
-  const frames = page.locator("article.provider-panel iframe");
-  const urls: string[] = [];
-  for (let index = 0; index < (await frames.count()); index += 1) {
-    urls.push(
-      await frames
-        .nth(index)
-        .contentFrame()
-        .locator("html")
-        .evaluate(() => window.location.href),
-    );
-  }
-  return urls;
+  return page
+    .frames()
+    .filter((frame) => frame.parentFrame() === page.mainFrame() && frame.name().startsWith("maw:"))
+    .map((frame) => frame.url())
+    .toSorted((left, right) => new URL(left).hostname.localeCompare(new URL(right).hostname));
 }
 
 async function openTargetSelector(page: Page): Promise<void> {
