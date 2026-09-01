@@ -40,8 +40,19 @@ export interface TurnRecord {
   sessionId: string;
   sequence: number;
   prompt: string;
+  /** The question before reusable prompt templates were applied. */
+  userQuestion?: string;
+  /** Immutable snapshots of the templates used for this send. */
+  appliedPromptTemplates?: AppliedPromptTemplate[];
   createdAt: string;
   status: TurnStatus;
+}
+
+export interface AppliedPromptTemplate {
+  id: string;
+  name: string;
+  content: string;
+  order: number;
 }
 
 export interface ProviderExchangeRecord {
@@ -55,6 +66,7 @@ export interface ProviderExchangeRecord {
   submitStatus: ExchangeSubmitStatus;
   responseStatus: ExchangeResponseStatus;
   responseText?: string;
+  responseMarkdown?: string;
   submittedAt?: string;
   completedAt?: string;
   message?: string;

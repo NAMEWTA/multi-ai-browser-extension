@@ -35,6 +35,7 @@ import {
 } from "../../core/messaging/protocol";
 import { providerRegistry } from "../../core/providers/registry";
 import type { ProviderDefinition } from "../../core/providers/contracts";
+import { composePrompt } from "../../core/prompts/compose-prompt";
 import {
   createLatestTurnTranscript,
   createOpenProvidersConversationTranscript,
@@ -45,7 +46,6 @@ import {
 } from "../../core/transcript";
 import type {
   ExchangeResponseStatus,
-  ProviderExchangeRecord,
   SessionRecord,
   SessionWorkspaceSnapshot,
 } from "../../db/database";
@@ -70,6 +70,10 @@ import {
   MAX_HISTORY_IMPORT_BYTES,
 } from "../../db/history-transfer";
 import { ActionMenu } from "./action-menu";
+import { promptErrorMessage } from "./prompt-error-message";
+import { PromptSelector } from "./prompt-selector";
+import { usePromptLibraryStore } from "./prompt-library-store";
+import { SessionHistoryDetail } from "./session-history-detail";
 import { copyText, downloadMarkdown } from "./text-transfer";
 import { useWorkspaceStore, type WorkspacePanel } from "./workspace-store";
 
@@ -84,6 +88,7 @@ export function WorkspaceApp() {
   const tileRatios = useWorkspaceStore((state) => state.tileRatios);
   const hydrated = useWorkspaceStore((state) => state.hydrated);
   const hydrate = useWorkspaceStore((state) => state.hydrate);
+  const hydratePromptLibrary = usePromptLibraryStore((state) => state.hydrate);
   const setSidebarOpen = useWorkspaceStore((state) => state.setSidebarOpen);
   const setLayoutMode = useWorkspaceStore((state) => state.setLayoutMode);
   const setPanelStatus = useWorkspaceStore((state) => state.setPanelStatus);
@@ -122,7 +127,7 @@ export function WorkspaceApp() {
   useEffect(() => {
     let mounted = true;
     void (async () => {
-      await hydrate();
+      await Promise.all([hydrate(), hydratePromptLibrary()]);
       workspaceSessionBootstrap ??= bootstrapWorkspaceSession();
       const active = await workspaceSessionBootstrap;
       if (active.workspace?.panels.length) {
@@ -138,7 +143,7 @@ export function WorkspaceApp() {
     return () => {
       mounted = false;
     };
-  }, [hydrate, restoreSnapshot]);
+  }, [hydrate, hydratePromptLibrary, restoreSnapshot]);
 
   useEffect(() => {
     if (!hydrated || !activeSessionId || switchingSession || startingSession) return;
@@ -244,10 +249,18 @@ export function WorkspaceApp() {
   }
 
   async function submitPrompt() {
-    const text = prompt.trim();
+    const userQuestion = prompt.trim();
     const targets = currentTargets();
     const sessionId = activeSessionId;
-    if (!text || !targets.length || !sessionId || sending || switchingSession) return;
+    if (!userQuestion || !targets.length || !sessionId || sending || switchingSession) return;
+    const promptTemplates = usePromptLibraryStore.getState().snapshotSelection();
+    let effectivePrompt: string;
+    try {
+      effectivePrompt = composePrompt({ templates: promptTemplates, question: userQuestion });
+    } catch (error) {
+      setNotice({ tone: "error", message: promptErrorMessage(error) });
+      return;
+    }
     const turnId = crypto.randomUUID();
     pendingTurnIdsRef.current.add(turnId);
     setSending(true);
@@ -257,7 +270,7 @@ export function WorkspaceApp() {
         type: "WORKSPACE_SUBMIT",
         sessionId,
         turnId,
-        prompt: text,
+        prompt: effectivePrompt,
         targets,
       })) as ProviderRunResult[];
       for (const result of results) {
@@ -286,7 +299,7 @@ export function WorkspaceApp() {
       responseBufferRef.current.delete(turnId);
       await recordSuccessfulTurn(
         sessionId,
-        text,
+        effectivePrompt,
         targets.map((target) => ({
           panelId: target.panelId,
           providerId: target.providerId,
@@ -295,14 +308,25 @@ export function WorkspaceApp() {
         results,
         earlyResponses ? [...earlyResponses.values()].map(toBufferedResponseUpdate) : [],
         turnId,
+        {
+          userQuestion,
+          appliedPromptTemplates: promptTemplates.map((template, order) => ({
+            ...template,
+            order,
+          })),
+        },
       );
       await flushBufferedResponses(turnId);
       pendingTurnIdsRef.current.delete(turnId);
       await refreshHistory();
       setPrompt("");
       inputRef.current?.focus();
-    } catch {
+    } catch (error) {
       responseBufferRef.current.delete(turnId);
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "发送失败，请检查目标网页状态。",
+      });
     } finally {
       pendingTurnIdsRef.current.delete(turnId);
       setSending(false);
@@ -717,6 +741,7 @@ export function WorkspaceApp() {
         <section className="composer-band" aria-label="全局输入">
           <div className="global-composer">
             <TargetSelector panels={panels} />
+            <PromptSelector question={prompt} />
             <textarea
               ref={inputRef}
               value={prompt}
@@ -1311,100 +1336,6 @@ function ProviderPicker({ onClose }: { onClose(): void }) {
   );
 }
 
-function SessionHistoryDetail({
-  detail,
-  onClose,
-  onTransfer,
-}: {
-  detail: SessionDetail;
-  onClose(): void;
-  onTransfer(mode: "copy" | "download"): void;
-}) {
-  return (
-    <div className="detail-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="history-detail"
-        role="dialog"
-        aria-modal="true"
-        aria-label="会话历史详情"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <div>
-            <strong>{detail.session.title}</strong>
-            <span>
-              {detail.turns.length} 轮问答 · {formatFullTime(detail.session.createdAt)}
-            </span>
-          </div>
-          <div className="history-detail-actions">
-            <ActionMenu
-              label="复制或下载完整会话"
-              icon={<Copy size={16} />}
-              items={[
-                {
-                  id: "copy",
-                  label: "复制完整会话",
-                  icon: <Copy size={14} />,
-                  onSelect: () => onTransfer("copy"),
-                },
-                {
-                  id: "download",
-                  label: "下载 Markdown",
-                  icon: <FileDown size={14} />,
-                  onSelect: () => onTransfer("download"),
-                },
-              ]}
-            />
-            <button type="button" title="关闭" aria-label="关闭" onClick={onClose}>
-              <X size={17} />
-            </button>
-          </div>
-        </header>
-        <div className="detail-content session-timeline">
-          {detail.turns.map(({ turn, exchanges }) => (
-            <article className="turn-record" key={turn.id}>
-              <header>
-                <strong>第 {turn.sequence} 轮</strong>
-                <span>
-                  {formatFullTime(turn.createdAt)} · {turnStatusLabel(turn.status)}
-                </span>
-              </header>
-              <section className="turn-prompt">
-                <span>我的提问</span>
-                <p>{turn.prompt}</p>
-              </section>
-              <div className="exchange-list">
-                {exchanges.map((exchange) => (
-                  <section className="exchange-record" key={exchange.id}>
-                    <header>
-                      <ProviderMark
-                        definition={providerRegistry.get(exchange.providerId).definition}
-                      />
-                      <strong>{exchange.providerName}</strong>
-                      <span className={`delivery-status status-${exchange.responseStatus}`}>
-                        {exchangeStatusLabel(exchange)}
-                      </span>
-                    </header>
-                    {exchange.responseText ? (
-                      <p>{exchange.responseText}</p>
-                    ) : (
-                      <p className="response-placeholder">
-                        {exchange.message ?? responsePlaceholder(exchange.responseStatus)}
-                      </p>
-                    )}
-                    {exchange.message && exchange.responseText && <small>{exchange.message}</small>}
-                  </section>
-                ))}
-              </div>
-            </article>
-          ))}
-          {detail.turns.length === 0 && <p className="history-notice">这个会话还没有发送内容。</p>}
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function captureWorkspaceSnapshot(): SessionWorkspaceSnapshot {
   const state = useWorkspaceStore.getState();
   return {
@@ -1453,6 +1384,7 @@ function toBufferedResponseUpdate(
     panelId: update.panelId,
     status: update.status,
     ...(update.text !== undefined ? { responseText: update.text } : {}),
+    ...(update.markdown !== undefined ? { responseMarkdown: update.markdown } : {}),
     ...(update.message !== undefined ? { message: update.message } : {}),
   };
 }
@@ -1466,6 +1398,7 @@ async function persistResponseUpdate(
     update.status,
     update.text,
     update.message,
+    update.markdown,
   );
 }
 
@@ -1493,65 +1426,9 @@ function statusLabel(status: WorkspacePanel["status"]): string {
   }[status];
 }
 
-function turnStatusLabel(status: SessionDetail["turns"][number]["turn"]["status"]): string {
-  return {
-    preparing: "预检中",
-    aborted: "已取消",
-    waiting: "等待回复",
-    completed: "已完成",
-    partial: "部分完成",
-    failed: "失败",
-  }[status];
-}
-
-function exchangeStatusLabel(exchange: ProviderExchangeRecord): string {
-  if (exchange.submitStatus !== "submitted") {
-    return (
-      {
-        pending: "待发送",
-        prepared: "已预检",
-        aborted: "未发送",
-        failed: "发送失败",
-        unavailable: "未连接",
-      }[exchange.submitStatus] ?? "已发送"
-    );
-  }
-  return {
-    waiting: "等待回复",
-    streaming: "回复中",
-    completed: "已完成",
-    partial: "部分回复",
-    timeout: "采集超时",
-    failed: "采集失败",
-    unsupported: "暂不支持采集",
-  }[exchange.responseStatus];
-}
-
-function responsePlaceholder(status: ProviderExchangeRecord["responseStatus"]): string {
-  return {
-    waiting: "正在等待该站点开始回复...",
-    streaming: "正在采集回复...",
-    completed: "该站点没有可见的回复文本",
-    partial: "仅采集到部分回复",
-    timeout: "等待回复超时",
-    failed: "回复采集失败",
-    unsupported: "当前站点暂不支持回复采集",
-  }[status];
-}
-
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatFullTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "long",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",

@@ -65,6 +65,20 @@ const turnSchema = z
     sessionId: z.string().min(1),
     sequence: z.number().int().positive(),
     prompt: z.string().max(100_000),
+    userQuestion: z.string().max(100_000).optional(),
+    appliedPromptTemplates: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(500),
+            name: z.string().min(1).max(120),
+            content: z.string().max(50_000),
+            order: z.number().int().nonnegative(),
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
     createdAt: z.iso.datetime(),
     status: z.enum(["preparing", "aborted", "waiting", "completed", "partial", "failed"]),
   })
@@ -90,6 +104,7 @@ const exchangeSchema = z
       "unsupported",
     ]),
     responseText: z.string().max(2_000_000).optional(),
+    responseMarkdown: z.string().max(2_000_000).optional(),
     submittedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
     message: z.string().max(2_000).optional(),
@@ -224,9 +239,16 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
   }
 
   const importedTurns: TurnRecord[] = turns.map((turn) => ({
-    ...turn,
     id: turnIdMap.get(turn.id)!,
     sessionId: sessionIdMap.get(turn.sessionId)!,
+    sequence: turn.sequence,
+    prompt: turn.prompt,
+    ...(turn.userQuestion !== undefined ? { userQuestion: turn.userQuestion } : {}),
+    ...(turn.appliedPromptTemplates !== undefined
+      ? { appliedPromptTemplates: turn.appliedPromptTemplates }
+      : {}),
+    createdAt: turn.createdAt,
+    status: turn.status,
   }));
   const importedExchanges: ProviderExchangeRecord[] = exchanges.map((exchange) => ({
     id: crypto.randomUUID(),
@@ -239,6 +261,9 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
     submitStatus: exchange.submitStatus,
     responseStatus: exchange.responseStatus,
     ...(exchange.responseText !== undefined ? { responseText: exchange.responseText } : {}),
+    ...(exchange.responseMarkdown !== undefined
+      ? { responseMarkdown: exchange.responseMarkdown }
+      : {}),
     ...(exchange.submittedAt !== undefined ? { submittedAt: exchange.submittedAt } : {}),
     ...(exchange.completedAt !== undefined ? { completedAt: exchange.completedAt } : {}),
     ...(exchange.message !== undefined ? { message: exchange.message } : {}),

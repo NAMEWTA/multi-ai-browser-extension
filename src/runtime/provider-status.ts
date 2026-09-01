@@ -17,43 +17,52 @@ export function watchProviderStatus(
   providerId: ProviderId,
 ): void {
   let checking = false;
-  let checkAgain = false;
+  let checkPending = false;
   let lastStatus = "";
   let stopped = false;
+  let debounceTimer: number | undefined;
+
+  const scheduleCheck = (delayMs = 200) => {
+    if (stopped) return;
+    checkPending = true;
+    if (debounceTimer !== undefined) return;
+    debounceTimer = ctx.window.setTimeout(() => {
+      debounceTimer = undefined;
+      void check();
+    }, delayMs);
+  };
 
   const check = async () => {
     if (stopped) return;
     if (checking) {
-      checkAgain = true;
+      checkPending = true;
       return;
     }
     checking = true;
+    checkPending = false;
     try {
-      do {
-        checkAgain = false;
-        const probe = await strategy.probe(ctx);
-        if (probe.status !== lastStatus) {
-          lastStatus = probe.status;
-          await browser.runtime
-            .sendMessage({
-              type: "FRAME_STATUS",
-              panelId,
-              providerId,
-              status: probe.status,
-              ...(probe.detail ? { message: probe.detail } : {}),
-            })
-            .catch(() => undefined);
-        }
-      } while (checkAgain && !stopped);
+      const probe = await strategy.probe(ctx);
+      if (probe.status !== lastStatus) {
+        lastStatus = probe.status;
+        await browser.runtime
+          .sendMessage({
+            type: "FRAME_STATUS",
+            panelId,
+            providerId,
+            status: probe.status,
+            ...(probe.detail ? { message: probe.detail } : {}),
+          })
+          .catch(() => undefined);
+      }
     } finally {
       checking = false;
+      if (checkPending) scheduleCheck();
     }
   };
 
   void check();
   const observer = new MutationObserver(() => {
-    checkAgain = true;
-    void check();
+    scheduleCheck();
   });
   observer.observe(ctx.document.documentElement, {
     childList: true,
@@ -61,13 +70,14 @@ export function watchProviderStatus(
     attributes: true,
     attributeFilter: ["class", "disabled", "aria-disabled", "style"],
   });
-  const interval = ctx.window.setInterval(() => void check(), 2_000);
+  const interval = ctx.window.setInterval(() => scheduleCheck(0), 2_000);
   ctx.window.addEventListener(
     "pagehide",
     () => {
       stopped = true;
       observer.disconnect();
       ctx.window.clearInterval(interval);
+      if (debounceTimer !== undefined) ctx.window.clearTimeout(debounceTimer);
     },
     { once: true },
   );

@@ -21,6 +21,7 @@ class TestStrategy extends BaseDomStrategy {
       composer: ["#composer"],
       submit: ["#send"],
       login: ["#login"],
+      blocked: ["#verification"],
       responses: [".assistant-response"],
       newConversationLabels: ["New chat"],
     });
@@ -34,6 +35,17 @@ describe("BaseDomStrategy", () => {
     const ctx = { document, window, timeoutMs: 10 };
     await expect(strategy.probe(ctx)).resolves.toMatchObject({ status: "needs-login" });
     await expect(strategy.waitUntilReady(ctx)).rejects.toMatchObject({ code: "LOGIN_REQUIRED" });
+  });
+
+  it("prioritizes a visible verification challenge over a usable composer", async () => {
+    document.body.innerHTML = '<textarea id="composer"></textarea><div id="verification"></div>';
+    const strategy = new TestStrategy();
+    const ctx = { document, window, timeoutMs: 10 };
+
+    await expect(strategy.probe(ctx)).resolves.toMatchObject({ status: "blocked" });
+    await expect(strategy.waitUntilReady(ctx)).rejects.toMatchObject({
+      code: "VERIFICATION_REQUIRED",
+    });
   });
 
   it("waits for a composer and can clear it during prompt synchronization", async () => {
@@ -81,6 +93,21 @@ describe("BaseDomStrategy", () => {
     const button = document.createElement("button");
     button.disabled = true;
     expect(() => new ButtonSubmitter().submit(button)).toThrow("发送按钮当前不可用");
+  });
+
+  it("clicks a submit control without moving focus or scrolling to it", () => {
+    document.body.innerHTML = '<input id="workspace-input"><button id="send">send</button>';
+    const input = document.querySelector<HTMLInputElement>("#workspace-input")!;
+    const button = document.querySelector<HTMLButtonElement>("#send")!;
+    const focus = vi.spyOn(button, "focus");
+    const click = vi.spyOn(button, "click");
+    input.focus();
+
+    new ButtonSubmitter().submit(button);
+
+    expect(focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+    expect(click).toHaveBeenCalledOnce();
   });
 
   it("returns a standardized submit error when no button appears", async () => {
@@ -164,7 +191,7 @@ describe("BaseDomStrategy", () => {
     expect(click).not.toHaveBeenCalled();
   });
 
-  it("captures a new stable assistant response as plain text", async () => {
+  it("captures a new stable assistant response as text and Markdown", async () => {
     vi.useFakeTimers();
     try {
       document.body.innerHTML =
@@ -179,8 +206,122 @@ describe("BaseDomStrategy", () => {
       response.textContent = "最终回复";
       document.body.append(response);
       await vi.advanceTimersByTimeAsync(2_250);
-      await expect(capture).resolves.toEqual({ status: "completed", text: "最终回复" });
-      expect(updates).toHaveBeenCalledWith({ status: "streaming", text: "最终回复" });
+      await expect(capture).resolves.toEqual({
+        status: "completed",
+        text: "最终回复",
+        markdown: "最终回复",
+      });
+      expect(updates).toHaveBeenCalledWith({
+        status: "streaming",
+        text: "最终回复",
+        markdown: "最终回复",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves captured content as partial when capture is aborted", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const controller = new AbortController();
+      const strategy = new TestStrategy();
+      const ctx = { document, window, signal: controller.signal, responseTimeoutMs: 3_000 };
+      const capture = strategy.captureResponse(ctx, { count: 0, lastText: "" }, vi.fn());
+      const response = document.createElement("div");
+      response.className = "assistant-response";
+      response.innerHTML = "<strong>部分回复</strong>";
+      document.body.append(response);
+      await vi.advanceTimersByTimeAsync(0);
+
+      controller.abort();
+
+      await expect(capture).resolves.toMatchObject({
+        status: "partial",
+        text: "部分回复",
+        markdown: "**部分回复**",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves captured content as partial when the response deadline is reached", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const strategy = new TestStrategy();
+      const ctx = { document, window, responseTimeoutMs: 500 };
+      const capture = strategy.captureResponse(ctx, { count: 0, lastText: "" }, vi.fn());
+      const response = document.createElement("div");
+      response.className = "assistant-response";
+      response.textContent = "超时前的回复";
+      document.body.append(response);
+
+      await vi.advanceTimersByTimeAsync(501);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "partial",
+        text: "超时前的回复",
+        markdown: "超时前的回复",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops capture when a verification challenge appears and preserves visible content", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const strategy = new TestStrategy();
+      const capture = strategy.captureResponse(
+        { document, window, responseTimeoutMs: 3_000 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+      const response = document.createElement("div");
+      response.className = "assistant-response";
+      response.textContent = "验证前回复";
+      document.body.append(response);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const verification = document.createElement("div");
+      verification.id = "verification";
+      document.body.append(verification);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "partial",
+        text: "验证前回复",
+        markdown: "验证前回复",
+        message: expect.stringContaining("人工验证"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails capture clearly when verification appears before any response", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const capture = new TestStrategy().captureResponse(
+        { document, window, responseTimeoutMs: 3_000 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+      const verification = document.createElement("div");
+      verification.id = "verification";
+      document.body.append(verification);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "failed",
+        message: expect.stringContaining("人工验证"),
+      });
     } finally {
       vi.useRealTimers();
     }

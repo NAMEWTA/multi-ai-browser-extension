@@ -34,4 +34,27 @@ describe("watchProviderStatus", () => {
     });
     window.dispatchEvent(new Event("pagehide"));
   });
+
+  it("debounces a burst of page mutations into one additional probe", async () => {
+    document.body.replaceChildren();
+    runtime.sendMessage.mockReset();
+    runtime.sendMessage.mockResolvedValue({ ok: true });
+    const strategy = {
+      probe: vi.fn(async () => ({ status: "loading" })),
+    } as unknown as ProviderStrategy;
+
+    watchProviderStatus(strategy, { document, window }, "panel-qwen", "qwen");
+    await vi.waitFor(() => expect(strategy.probe).toHaveBeenCalledOnce());
+
+    for (let index = 0; index < 20; index += 1) {
+      const item = document.createElement("div");
+      item.className = `item-${index}`;
+      document.body.append(item);
+    }
+
+    await vi.waitFor(() => expect(strategy.probe).toHaveBeenCalledTimes(2));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+    expect(strategy.probe).toHaveBeenCalledTimes(2);
+    window.dispatchEvent(new Event("pagehide"));
+  });
 });

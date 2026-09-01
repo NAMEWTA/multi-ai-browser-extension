@@ -133,6 +133,21 @@ describe("Markdown transcripts", () => {
     expect(markdown).toContain("> 回复状态：partial");
   });
 
+  it("uses the original question for navigation text and prefers captured Markdown", () => {
+    const detail = createDetail();
+    const latest = detail.turns.find(({ turn }) => turn.id === "turn-2")!;
+    latest.turn.userQuestion = "Original short question";
+    latest.turn.prompt = "Template\nInstructions\n\n用户\nOriginal short question";
+    latest.exchanges[0]!.responseText = "plain fallback";
+    latest.exchanges[0]!.responseMarkdown = "## Structured answer";
+
+    const markdown = renderProviderLatestExchangeMarkdown(detail, { providerId: "deepseek" });
+    expect(markdown).toContain("## 用户：Original short question");
+    expect(markdown).toContain("Template\nInstructions");
+    expect(markdown).toContain("## Structured answer");
+    expect(markdown).not.toContain("plain fallback");
+  });
+
   it("returns clipboard and download-ready artifacts for every scope", () => {
     const detail = createDetail();
     const artifacts = [

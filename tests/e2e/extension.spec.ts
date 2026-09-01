@@ -1,4 +1,11 @@
-import { expect, test, chromium, type BrowserContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  chromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -108,12 +115,25 @@ test("submits exactly once and stores provider replies in the session timeline",
   await workspace.getByLabel("查看对话记录").first().click();
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail).toContainText(prompt);
-  await expect(detail.locator(".exchange-record")).toHaveCount(2);
-  await expect(detail.locator(".exchange-record").first()).toContainText(
+  const exchanges = detail.locator(".unified-exchange-record");
+  await expect(exchanges).toHaveCount(2);
+  const desktopTimeline = await detail.locator(".unified-history-timeline").boundingBox();
+  const desktopNavigation = await detail.locator(".unified-question-navigation").boundingBox();
+  expect(desktopNavigation!.x).toBeGreaterThan(desktopTimeline!.x);
+  await expect(
+    detail.locator('.unified-question-navigation button[aria-current="location"]'),
+  ).toContainText(prompt);
+  expect(
+    await detail
+      .locator(".unified-exchange-summary")
+      .evaluateAll((summaries) =>
+        summaries.map((summary) => summary.getAttribute("aria-expanded")),
+      ),
+  ).toEqual(["false", "false"]);
+  await exchanges.first().locator(".unified-exchange-summary").click();
+  await expect(exchanges.first().locator(".unified-exchange-content")).toContainText(
     `Mock AI 回复：${prompt}`,
-    {
-      timeout: 10_000,
-    },
+    { timeout: 10_000 },
   );
   await detail.getByTitle("关闭").click();
 
@@ -127,13 +147,27 @@ test("submits exactly once and stores provider replies in the session timeline",
   await expect(workspace.getByRole("status")).toContainText("已复制 DeepSeek 最近一次问答");
 });
 
+test("moves unified question navigation above the timeline on narrow screens", async () => {
+  await workspace.setViewportSize({ width: 700, height: 800 });
+  await workspace.getByLabel("查看对话记录").first().click();
+  const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
+  const timeline = await detail.locator(".unified-history-timeline").boundingBox();
+  const navigation = await detail.locator(".unified-question-navigation").boundingBox();
+  expect(navigation!.y).toBeLessThanOrEqual(timeline!.y);
+  expect(await workspace.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    await workspace.evaluate(() => document.documentElement.clientWidth),
+  );
+  await detail.getByTitle("关闭").click();
+  await workspace.setViewportSize({ width: 1440, height: 900 });
+});
+
 test("keeps multiple turns and restores exact official URLs when switching tasks", async () => {
   await workspace.locator(".global-composer textarea").fill("同一会话的第二个问题");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   await expect(workspace.locator(".history-item")).toHaveCount(1);
   await workspace.getByLabel("查看对话记录").first().click();
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
-  await expect(detail.locator(".turn-record")).toHaveCount(2);
+  await expect(detail.locator(".unified-turn-record")).toHaveCount(2);
   await detail.getByTitle("关闭").click();
 
   const oldUrls = await getFrameUrls(workspace);
@@ -269,7 +303,7 @@ test("aborts all sends when one provider fails strict preflight", async () => {
   await workspace.getByLabel("查看对话记录").first().click();
   const turnsBefore = await workspace
     .getByRole("dialog", { name: "会话历史详情" })
-    .locator(".turn-record")
+    .locator(".unified-turn-record")
     .count();
   await workspace.getByRole("dialog", { name: "会话历史详情" }).getByTitle("关闭").click();
   const broken = workspace.locator("article.provider-panel[data-provider='qwen']");
@@ -300,7 +334,7 @@ test("aborts all sends when one provider fails strict preflight", async () => {
   }
   await workspace.getByLabel("查看对话记录").first().click();
   await expect(
-    workspace.getByRole("dialog", { name: "会话历史详情" }).locator(".turn-record"),
+    workspace.getByRole("dialog", { name: "会话历史详情" }).locator(".unified-turn-record"),
   ).toHaveCount(turnsBefore);
   await workspace.getByRole("dialog", { name: "会话历史详情" }).getByTitle("关闭").click();
   await broken.getByTitle("刷新网页").click();
@@ -415,6 +449,34 @@ test("renders provider frames at a stable native scale", async () => {
   expect(new Set(samples.map((sample) => sample.transform))).toEqual(new Set(["none"]));
 });
 
+test("sends the exact A plus C prompt composition to every selected website", async () => {
+  await workspace.locator(".prompt-summary").click();
+  await workspace
+    .getByRole("dialog", { name: "选择提示词" })
+    .getByRole("button", { name: "管理提示词" })
+    .click();
+  const manager = workspace.getByRole("dialog", { name: "管理提示词" });
+  await addPromptTemplate(manager, "提示词A", "使用表格回答");
+  await addPromptTemplate(manager, "提示词B", "给出更多例子");
+  await addPromptTemplate(manager, "提示词C", "保持简洁");
+  await manager.getByTitle("关闭").click();
+
+  await workspace.locator(".prompt-summary").click();
+  const selector = workspace.getByRole("dialog", { name: "选择提示词" });
+  await selector.getByRole("checkbox", { name: /提示词A/ }).check();
+  await selector.getByRole("checkbox", { name: /提示词C/ }).check();
+  await workspace.locator(".global-composer textarea").fill("解释 Go channel");
+  await workspace.getByRole("button", { name: "发送", exact: true }).click();
+
+  const expected = "提示词A\n使用表格回答\n\n提示词C\n保持简洁\n\n用户\n解释 Go channel";
+  const frames = workspace.locator("article.provider-panel iframe");
+  for (let index = 0; index < (await frames.count()); index += 1) {
+    await expect(frames.nth(index).contentFrame().locator("[data-last-prompt]")).toHaveText(
+      expected,
+    );
+  }
+});
+
 async function getSubmitCounts(page: Page): Promise<number[]> {
   const frames = page.locator("article.provider-panel iframe");
   const counts: number[] = [];
@@ -426,6 +488,14 @@ async function getSubmitCounts(page: Page): Promise<number[]> {
     );
   }
   return counts;
+}
+
+async function addPromptTemplate(manager: Locator, name: string, content: string) {
+  await manager.getByRole("button", { name: "新建提示词" }).click();
+  await manager.getByLabel("名称").fill(name);
+  await manager.getByLabel("内容").fill(content);
+  await manager.getByRole("button", { name: "保存" }).click();
+  await expect(manager.locator(".prompt-library-list")).toContainText(name);
 }
 
 async function getFrameUrls(page: Page): Promise<string[]> {
@@ -482,7 +552,7 @@ function mockProviderHtml(host: string): string {
     <script>
       const readPrompt = () => {
         const values = [...document.querySelectorAll('textarea, [contenteditable]')].map((element) =>
-          'value' in element ? element.value : element.textContent || ''
+          'value' in element ? element.value : element.innerText || element.textContent || ''
         );
         return values.find((value) => value.length > 0) || '';
       };

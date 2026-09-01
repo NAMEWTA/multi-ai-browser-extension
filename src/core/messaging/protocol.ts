@@ -95,6 +95,7 @@ export const providerResponseUpdateSchema = z.object({
   turnId: z.string().min(1),
   status: responseCaptureStatusSchema,
   text: z.string().max(2_000_000).optional(),
+  markdown: z.string().max(2_000_000).optional(),
   message: z.string().max(1_000).optional(),
 });
 

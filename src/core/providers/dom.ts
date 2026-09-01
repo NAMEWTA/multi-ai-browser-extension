@@ -163,7 +163,58 @@ export function readComposerValue(element: HTMLElement): string {
   )) {
     placeholder.remove();
   }
-  return clone.textContent ?? "";
+  return readEditableNode(clone).replace(/\n$/u, "");
+}
+
+const EDITOR_BLOCK_ELEMENTS = new Set([
+  "ADDRESS",
+  "ARTICLE",
+  "ASIDE",
+  "BLOCKQUOTE",
+  "DIV",
+  "FOOTER",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "HEADER",
+  "LI",
+  "MAIN",
+  "NAV",
+  "OL",
+  "P",
+  "PRE",
+  "SECTION",
+  "UL",
+]);
+
+function readEditableNode(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (!(node instanceof Element)) {
+    return readEditableChildren(node);
+  }
+  if (node.tagName === "BR") return "\n";
+  const content = readEditableChildren(node);
+  if (!EDITOR_BLOCK_ELEMENTS.has(node.tagName) || !node.parentElement) return content;
+  return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+function readEditableChildren(node: Node): string {
+  let value = "";
+  for (const child of node.childNodes) {
+    if (
+      child instanceof Element &&
+      EDITOR_BLOCK_ELEMENTS.has(child.tagName) &&
+      value &&
+      !value.endsWith("\n")
+    ) {
+      value += "\n";
+    }
+    value += readEditableNode(child);
+  }
+  return value;
 }
 
 export function dispatchInputEvents(element: HTMLElement, text: string): void {

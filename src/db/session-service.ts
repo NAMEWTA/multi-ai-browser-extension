@@ -2,6 +2,7 @@ import type { ProviderId } from "../core/providers/contracts";
 import { providerRegistry } from "../core/providers/registry";
 import {
   db,
+  type AppliedPromptTemplate,
   type ExchangeResponseStatus,
   type ExchangeSubmitStatus,
   type ProviderExchangeRecord,
@@ -46,7 +47,13 @@ export interface BufferedResponseUpdate {
   panelId: string;
   status: ExchangeResponseStatus;
   responseText?: string;
+  responseMarkdown?: string;
   message?: string;
+}
+
+export interface TurnPromptMetadata {
+  userQuestion?: string;
+  appliedPromptTemplates?: readonly AppliedPromptTemplate[];
 }
 
 export interface SessionDetail {
@@ -179,6 +186,7 @@ export async function recordSuccessfulTurn(
   results: readonly SubmitResultLike[],
   responseUpdates: readonly BufferedResponseUpdate[] = [],
   id: string = crypto.randomUUID(),
+  metadata: TurnPromptMetadata = {},
 ): Promise<TurnRecord> {
   const resultByPanel = new Map(results.map((result) => [result.panelId, result]));
   const submittedTargets = targets.filter((target) => {
@@ -191,11 +199,13 @@ export async function recordSuccessfulTurn(
   for (const update of responseUpdates) {
     const previous = latestResponseByPanel.get(update.panelId);
     const responseText = update.responseText ?? previous?.responseText;
+    const responseMarkdown = update.responseMarkdown ?? previous?.responseMarkdown;
     const message = update.message ?? previous?.message;
     latestResponseByPanel.set(update.panelId, {
       panelId: update.panelId,
       status: update.status,
       ...(responseText !== undefined ? { responseText } : {}),
+      ...(responseMarkdown !== undefined ? { responseMarkdown } : {}),
       ...(message !== undefined ? { message } : {}),
     });
   }
@@ -222,6 +232,9 @@ export async function recordSuccessfulTurn(
         responseStatus,
         ...(submitStatus === "submitted" ? { submittedAt: timestamp } : {}),
         ...(response?.responseText !== undefined ? { responseText: response.responseText } : {}),
+        ...(response?.responseMarkdown !== undefined
+          ? { responseMarkdown: response.responseMarkdown }
+          : {}),
         ...(message !== undefined ? { message } : {}),
         ...(submitStatus !== "submitted" || TERMINAL_RESPONSE_STATUSES.has(responseStatus)
           ? { completedAt: timestamp }
@@ -239,7 +252,8 @@ export async function recordSuccessfulTurn(
       ? "waiting"
       : completed === submitted.length
         ? "completed"
-        : completed > 0 || submitted.some((exchange) => exchange.responseText)
+        : completed > 0 ||
+            submitted.some((exchange) => exchange.responseText || exchange.responseMarkdown)
           ? "partial"
           : "failed";
     const turn: TurnRecord = {
@@ -247,6 +261,14 @@ export async function recordSuccessfulTurn(
       sessionId,
       sequence: (last?.sequence ?? 0) + 1,
       prompt,
+      ...(metadata.userQuestion !== undefined ? { userQuestion: metadata.userQuestion } : {}),
+      ...(metadata.appliedPromptTemplates?.length
+        ? {
+            appliedPromptTemplates: metadata.appliedPromptTemplates.map((template) => ({
+              ...template,
+            })),
+          }
+        : {}),
       createdAt: timestamp,
       status,
     };
@@ -254,7 +276,9 @@ export async function recordSuccessfulTurn(
     await db.exchanges.bulkAdd(exchanges);
     await db.sessions.update(sessionId, {
       contentUpdatedAt: timestamp,
-      ...(session.title === "新会话" ? { title: titleFromPrompt(prompt) } : {}),
+      ...(session.title === "新会话"
+        ? { title: titleFromPrompt(metadata.userQuestion ?? prompt) }
+        : {}),
     });
     return turn;
   });
@@ -273,6 +297,7 @@ export async function applyResponseUpdate(
   status: ExchangeResponseStatus,
   responseText?: string,
   message?: string,
+  responseMarkdown?: string,
 ): Promise<void> {
   const timestamp = nowIso();
   await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
@@ -288,6 +313,7 @@ export async function applyResponseUpdate(
     await db.exchanges.update(exchange.id, {
       responseStatus: status,
       ...(responseText !== undefined ? { responseText } : {}),
+      ...(responseMarkdown !== undefined ? { responseMarkdown } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(TERMINAL_RESPONSE_STATUSES.has(status) ? { completedAt: timestamp } : {}),
     });
@@ -295,7 +321,12 @@ export async function applyResponseUpdate(
     const exchanges = await db.exchanges.where("turnId").equals(turnId).toArray();
     const updated = exchanges.map((item) =>
       item.id === exchange.id
-        ? { ...item, responseStatus: status, responseText: responseText ?? item.responseText }
+        ? {
+            ...item,
+            responseStatus: status,
+            responseText: responseText ?? item.responseText,
+            responseMarkdown: responseMarkdown ?? item.responseMarkdown,
+          }
         : item,
     );
     const submitted = updated.filter((item) => item.submitStatus === "submitted");
@@ -308,7 +339,7 @@ export async function applyResponseUpdate(
       turnStatus =
         completed === submitted.length
           ? "completed"
-          : completed > 0 || updated.some((item) => item.responseText)
+          : completed > 0 || updated.some((item) => item.responseText || item.responseMarkdown)
             ? "partial"
             : "failed";
     }

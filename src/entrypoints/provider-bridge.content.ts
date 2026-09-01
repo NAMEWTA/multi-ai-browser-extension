@@ -31,6 +31,12 @@ interface PreparedTurn {
   phase: "prechecked" | "staged";
 }
 
+interface ActiveCapture {
+  turnId: string;
+  controller: AbortController;
+  completion: Promise<void>;
+}
+
 export default defineContentScript({
   matches: [...builtInProviderMatches],
   allFrames: true,
@@ -43,6 +49,7 @@ export default defineContentScript({
     const tasks = new TaskLedger<ProviderRunResult>();
     const preparedTurns = new Map<string, PreparedTurn>();
     let commandQueue = Promise.resolve();
+    let activeCapture: ActiveCapture | undefined;
 
     const hello = (await browser.runtime.sendMessage({
       type: "FRAME_HELLO",
@@ -72,6 +79,7 @@ export default defineContentScript({
           turnId: command.turnId,
           status: update.status,
           ...(update.text !== undefined ? { text: update.text } : {}),
+          ...(update.markdown !== undefined ? { markdown: update.markdown } : {}),
           ...(update.message ? { message: update.message } : {}),
         })
         .catch(() => undefined);
@@ -84,10 +92,11 @@ export default defineContentScript({
     const captureResponse = async (
       command: CommitPromptMessage,
       baseline: ResponseBaseline,
+      signal: AbortSignal,
     ): Promise<void> => {
       try {
         await reportResponse(command, { status: "waiting" });
-        const final = await strategy.captureResponse(ctx, baseline, (update) =>
+        const final = await strategy.captureResponse({ ...ctx, signal }, baseline, (update) =>
           reportResponse(command, update),
         );
         await reportResponse(command, final);
@@ -98,6 +107,28 @@ export default defineContentScript({
           message: normalized.message,
         });
       }
+    };
+
+    const stopActiveCapture = async (): Promise<void> => {
+      const current = activeCapture;
+      if (!current) return;
+      current.controller.abort();
+      await current.completion.catch(() => undefined);
+      if (activeCapture === current) activeCapture = undefined;
+    };
+
+    const startCapture = (command: CommitPromptMessage, baseline: ResponseBaseline): void => {
+      const controller = new AbortController();
+      const capture: ActiveCapture = {
+        turnId: command.turnId,
+        controller,
+        completion: Promise.resolve(),
+      };
+      capture.completion = captureResponse(command, baseline, controller.signal).finally(() => {
+        if (activeCapture === capture) activeCapture = undefined;
+      });
+      activeCapture = capture;
+      void capture.completion;
     };
 
     const handleCommand = async (command: ProviderCommand): Promise<ProviderRunResult> => {
@@ -138,6 +169,7 @@ export default defineContentScript({
               status: "duplicate",
             };
           }
+          await stopActiveCapture();
           const baseline = await strategy.prepareSubmit(ctx);
           preparedTurns.set(command.turnId, {
             sessionId: command.sessionId,
@@ -258,6 +290,7 @@ export default defineContentScript({
             );
           }
           tasks.start(taskKey);
+          await stopActiveCapture();
           await strategy.startNewConversation(ctx);
           preparedTurns.clear();
           const result: ProviderRunResult = {
@@ -322,7 +355,7 @@ export default defineContentScript({
           status: "submitted",
         };
         tasks.succeed(command.turnId, result);
-        void captureResponse(command, prepared.baseline);
+        startCapture(command, prepared.baseline);
         return result;
       } catch (error) {
         const normalized = normalizeProviderError(error);
@@ -369,6 +402,7 @@ export default defineContentScript({
     watchProviderStatus(strategy, ctx, panelId, plugin.definition.id);
     watchProviderUrl(panelId, plugin.definition.id, ctx);
     startFrameHeartbeat({ panelId, providerId: plugin.definition.id, strategy, ctx });
+    window.addEventListener("pagehide", () => activeCapture?.controller.abort(), { once: true });
 
     browser.runtime.onMessage.addListener(async (raw) => {
       const parsed = providerCommandSchema.safeParse(raw);

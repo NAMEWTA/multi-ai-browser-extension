@@ -81,6 +81,93 @@ describe("QwenStrategy", () => {
     );
   });
 
+  it("recognizes a visible verification challenge without trying to bypass it", async () => {
+    document.body.innerHTML = `
+      <textarea class="message-input-textarea"></textarea>
+      <div class="nc-container">请完成验证</div>
+    `;
+
+    await expect(
+      new QwenStrategy().probe({ document, window, timeoutMs: 100 }),
+    ).resolves.toMatchObject({ status: "blocked" });
+  });
+
+  it("recognizes the current stop control as an in-progress response", async () => {
+    document.body.innerHTML = `
+      <textarea class="message-input-textarea"></textarea>
+      <button class="stop-button">stop</button>
+    `;
+
+    await expect(
+      new QwenStrategy().prepareSubmit({ document, window, timeoutMs: 100 }),
+    ).rejects.toMatchObject({ code: "PROVIDER_BUSY" });
+  });
+
+  it("captures Qwen 4.4 answer markup by chat id after a longer quiet period", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <textarea class="message-input-textarea"></textarea>
+        <section class="chat-round" data-chat="old-chat">
+          <div class="chat-answers-card-wrap" data-chat-answers-wrap="old-answer">
+            <div class="answer-text md-text-card"><div class="qk-markdown">旧回复</div></div>
+          </div>
+        </section>
+      `;
+      const strategy = new QwenStrategy();
+      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 10_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      expect(baseline).toMatchObject({
+        keys: ["qwen-chat:old-chat"],
+        lastKey: "qwen-chat:old-chat",
+        lastText: "旧回复",
+      });
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(ctx, baseline, updates);
+
+      const round = document.createElement("section");
+      round.className = "chat-round last-message-item";
+      round.dataset.chat = "new-chat";
+      round.innerHTML = `
+        <div class="chat-answers-card-wrap" data-chat-answers-wrap="new-answer">
+          <div class="answer-text md-text-card">
+            <div class="qk-markdown"><h2>结构化回答</h2><p><strong>正文</strong></p></div>
+          </div>
+          <div class="answer-receiving-card">生成中</div>
+        </div>
+      `;
+      document.body.append(round);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updates).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "streaming",
+          text: expect.stringContaining("结构化回答"),
+          markdown: expect.stringContaining("## 结构化回答"),
+        }),
+      );
+
+      round.querySelector(".answer-receiving-card")?.remove();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_999);
+      let completed = false;
+      void capture.then(() => {
+        completed = true;
+      });
+      await Promise.resolve();
+      expect(completed).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(2);
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        text: expect.stringContaining("结构化回答"),
+        markdown: expect.stringContaining("## 结构化回答"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails safely instead of switching composers when the bound node is replaced", async () => {
     document.body.innerHTML = `
       <section class="chat-composer">

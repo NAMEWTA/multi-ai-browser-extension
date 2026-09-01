@@ -26,6 +26,7 @@ interface TranscriptTurn {
   createdAt: string;
   id: string;
   prompt: string;
+  userQuestion?: string;
   exchanges: readonly ProviderExchangeRecord[];
 }
 
@@ -167,18 +168,20 @@ function renderTurn(turn: TranscriptTurn): string {
   const answers = exchanges.length
     ? exchanges.map(renderExchange).join("\n\n")
     : "> 该问题没有对应的 AI 回复记录。";
-  return `## 用户：${inlineHeading(turn.prompt) || "（空内容）"}\n\n${turn.prompt}\n\n${answers}`;
+  const question = turn.userQuestion ?? turn.prompt;
+  return `## 用户：${inlineHeading(question) || "（空内容）"}\n\n${turn.prompt}\n\n${answers}`;
 }
 
 function renderExchange(exchange: ProviderExchangeRecord): string {
   const providerName = inlineHeading(exchange.providerName) || exchange.providerId;
   const heading = `### ${providerName}`;
-  if (exchange.responseText !== undefined && exchange.responseText.length > 0) {
+  const response = exchange.responseMarkdown || exchange.responseText;
+  if (response !== undefined && response.length > 0) {
     const metadata =
       exchange.responseStatus === "completed"
         ? ""
         : `\n\n${renderStatusQuote(exchange, "回复采集尚未完成。")}`;
-    return `${heading}\n\n${exchange.responseText}${metadata}`;
+    return `${heading}\n\n${response}${metadata}`;
   }
   return `${heading}\n\n${renderStatusQuote(exchange, "未采集到回复内容。")}`;
 }
@@ -202,6 +205,7 @@ function sortedTurns(detail: SessionDetail): TranscriptTurn[] {
       createdAt: turn.createdAt,
       id: turn.id,
       prompt: turn.prompt,
+      ...(turn.userQuestion !== undefined ? { userQuestion: turn.userQuestion } : {}),
       exchanges: sortedExchanges(exchanges),
     }))
     .toSorted(compareTurns);

@@ -29,6 +29,25 @@ export class QwenStrategy extends BaseDomStrategy {
   protected override findComposer(document: Document): HTMLElement | undefined {
     return selectCandidate(evaluateCandidates(document))?.element;
   }
+
+  protected override responseKey(element: HTMLElement, index: number): string | undefined {
+    const chatId = element.closest<HTMLElement>(".chat-round[data-chat]")?.dataset.chat?.trim();
+    if (chatId) return `qwen-chat:${chatId}`;
+
+    const answerId = element.getAttribute("data-chat-answers-wrap")?.trim();
+    if (answerId) return `qwen-answer:${answerId}`;
+
+    const responseId = element.closest<HTMLElement>("[id^='chat-response-message-']")?.id;
+    return responseId ? `qwen-response:${responseId}` : super.responseKey(element, index);
+  }
+
+  protected override isResponseGenerating(document: Document, response: HTMLElement): boolean {
+    const receiving = response
+      .closest<HTMLElement>(".chat-round[data-chat]")
+      ?.querySelector<HTMLElement>(".answer-receiving-card");
+    if (receiving && isElementVisible(receiving)) return true;
+    return super.isResponseGenerating(document, response);
+  }
 }
 
 interface EvaluatedCandidate {
@@ -53,6 +72,7 @@ function evaluateCandidate(element: HTMLElement): EvaluatedCandidate {
   const selectorIndex = qwenSelectors.composer.findIndex((selector) => element.matches(selector));
   if (selectorIndex >= 0) score += (qwenSelectors.composer.length - selectorIndex) * 4;
   if (element.id === "chat-input") score += 240;
+  if (element.classList.contains("message-input-textarea")) score += 240;
   if (element.getAttribute("data-slate-editor") === "true") score += 220;
   if (element.classList.contains("ProseMirror")) score += 180;
   if (element.isContentEditable || element.getAttribute("contenteditable") === "true") score += 100;

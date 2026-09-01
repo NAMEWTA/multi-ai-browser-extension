@@ -26,7 +26,13 @@ export interface ProviderSelectors {
   readonly composer: readonly string[];
   readonly submit: readonly string[];
   readonly login?: readonly string[];
+  readonly blocked?: readonly string[];
   readonly responses?: readonly string[];
+  readonly responseContent?: readonly string[];
+  readonly responseExclude?: readonly string[];
+  readonly responseTimeoutMs?: number;
+  readonly responseQuietMs?: number;
+  readonly responsePollMs?: number;
   readonly generating?: readonly string[];
   readonly newConversation?: readonly string[];
   readonly newConversationLabels?: readonly string[];
@@ -54,6 +60,8 @@ export interface ProbeResult {
 export interface ResponseBaseline {
   readonly count: number;
   readonly lastText: string;
+  readonly keys?: readonly string[];
+  readonly lastKey?: string;
 }
 
 export type ResponseCaptureStatus =
@@ -62,6 +70,7 @@ export type ResponseCaptureStatus =
 export interface ResponseCaptureUpdate {
   readonly status: ResponseCaptureStatus;
   readonly text?: string;
+  readonly markdown?: string;
   readonly message?: string;
 }
 

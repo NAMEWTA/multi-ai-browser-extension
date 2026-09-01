@@ -27,6 +27,33 @@ describe("KimiStrategy", () => {
     expect(composer).toHaveTextContent("统一输入");
   });
 
+  it("preserves multiline prompts when Lexical materializes lines as block elements", async () => {
+    const composer = document.querySelector<HTMLElement>(".chat-input-editor")!;
+    const submit = document.querySelector<HTMLElement>(".send-button-container")!;
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn((_command: string, _showUi: boolean, text: string) => {
+        const [firstLine = "", ...remainingLines] = text.split("\n");
+        composer.replaceChildren(
+          document.createTextNode(firstLine),
+          ...remainingLines.map((line) => {
+            const block = document.createElement("div");
+            block.append(line ? document.createTextNode(line) : document.createElement("br"));
+            return block;
+          }),
+        );
+        submit.classList.remove("disabled");
+        submit.removeAttribute("aria-disabled");
+        return true;
+      }),
+    });
+
+    const prompt = "提示词A\n使用表格回答\n\n用户\n解释 Go channel";
+    await new KimiStrategy().writePrompt({ document, window, timeoutMs: 100 }, { text: prompt });
+
+    expect(composer).toHaveTextContent("提示词A使用表格回答用户解释 Go channel");
+  });
+
   it("prechecks before Kimi enables its send control, then stages without clicking", async () => {
     const composer = document.querySelector<HTMLElement>(".chat-input-editor")!;
     const submit = document.querySelector<HTMLElement>(".send-button-container")!;

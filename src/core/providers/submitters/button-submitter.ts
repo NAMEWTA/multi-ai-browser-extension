@@ -10,7 +10,6 @@ export class ButtonSubmitter {
     ) {
       throw new ProviderError("SUBMIT_DISABLED", "发送按钮当前不可用");
     }
-    element.focus();
     element.click();
   }
 }
