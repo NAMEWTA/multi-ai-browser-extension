@@ -6,6 +6,7 @@ export const providerIds = [
   "claude",
   "qwen",
   "minimax",
+  "doubao",
 ] as const;
 
 export type BuiltInProviderId = (typeof providerIds)[number];

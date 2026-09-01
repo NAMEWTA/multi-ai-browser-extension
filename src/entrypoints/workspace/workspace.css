@@ -211,7 +211,8 @@ textarea:focus-visible {
 }
 
 .history-row:hover,
-.history-row.active {
+.history-row.active,
+.history-row.renaming {
   background: #e9edf2;
 }
 
@@ -224,6 +225,37 @@ textarea:focus-visible {
   border-radius: 2px;
   background: var(--accent);
   content: "";
+}
+
+.history-rename-form {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) 26px 26px;
+  align-items: center;
+  gap: 3px;
+  min-height: 50px;
+  padding: 6px 3px 6px 8px;
+}
+
+.history-rename-form input {
+  min-width: 0;
+  height: 29px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  outline: 0;
+  background: #fff;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.history-rename-form input:focus {
+  box-shadow: 0 0 0 2px rgb(70 103 255 / 15%);
+}
+
+.history-rename-form .history-action {
+  opacity: 1;
 }
 
 .history-item {

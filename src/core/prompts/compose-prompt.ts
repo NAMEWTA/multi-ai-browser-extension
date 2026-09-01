@@ -24,15 +24,19 @@ export function snapshotSelectedPromptTemplates(
     .map(({ id, name, content }) => ({ id, name, content }));
 }
 
+function fencedSection(label: string, content: string): string {
+  return `\`\`\`${label}\n${content}\n\`\`\``;
+}
+
 export function composePrompt({ templates, question }: ComposePromptInput): string {
   const templateSections = templates.map((template) => {
     assertPromptTemplateId(template.id);
     const normalized = normalizePromptTemplateInput(template);
-    return `${normalized.name}\n${normalized.content}`;
+    return fencedSection(normalized.name, normalized.content);
   });
   const normalizedQuestion = normalizeUserQuestion(question);
   const composed = templateSections.length
-    ? [...templateSections, `用户\n${normalizedQuestion}`].join("\n\n")
+    ? [...templateSections, fencedSection("用户", normalizedQuestion)].join("\n\n")
     : normalizedQuestion;
 
   if (countCharacters(composed) > MAX_COMPOSED_PROMPT_LENGTH) {

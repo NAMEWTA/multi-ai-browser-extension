@@ -8,4 +8,5 @@ export const builtInProviderMatches = [
   "https://www.qianwen.com/*",
   "https://chat.minimax.io/*",
   "https://agent.minimax.io/*",
+  "https://www.doubao.com/*",
 ] as const;

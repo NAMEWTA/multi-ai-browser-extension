@@ -19,6 +19,7 @@ const expectedHosts = [
   "claude.ai",
   "www.qianwen.com",
   "agent.minimax.io",
+  "www.doubao.com",
 ];
 
 let context: BrowserContext;
@@ -45,14 +46,14 @@ test.afterAll(async () => {
   if (profilePath) await rm(profilePath, { recursive: true, force: true });
 });
 
-test("loads the seven configured real AI websites without test interception", async () => {
+test("loads the eight configured real AI websites without test interception", async () => {
   await workspace.getByRole("button", { name: "管理站点" }).click();
-  for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax"]) {
+  for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax", "豆包"]) {
     await workspace.getByRole("checkbox", { name: `打开 ${name}` }).check();
   }
   await workspace.getByRole("button", { name: "完成" }).click();
   const frames = workspace.locator("article.provider-panel iframe");
-  await expect(frames).toHaveCount(7);
+  await expect(frames).toHaveCount(8);
 
   const observations: Array<{ expectedHost: string; finalUrl: string; composerFound: boolean }> =
     [];

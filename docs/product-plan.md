@@ -42,15 +42,16 @@ Multi AI Workspace 是 Chrome/Chromium 全页扩展工作台。它在一个扩�
 
 ## 4. 站点范围
 
-预配置站点：DeepSeek、Kimi、Coze、ChatGPT、Claude、通义千问、MiniMax。
+预配置站点：DeepSeek、Kimi、Coze、ChatGPT、Claude、通义千问、MiniMax、豆包。
 
 已确认正式入口：
 
-| 站点     | 地址                         |
-| -------- | ---------------------------- |
-| DeepSeek | `https://chat.deepseek.com/` |
-| Kimi     | `https://www.kimi.com/`      |
-| 通义千问 | `https://www.qianwen.com/`   |
+| 站点     | 地址                           |
+| -------- | ------------------------------ |
+| DeepSeek | `https://chat.deepseek.com/`   |
+| Kimi     | `https://www.kimi.com/`        |
+| 通义千问 | `https://www.qianwen.com/`     |
+| 豆包     | `https://www.doubao.com/chat/` |
 
 DeepSeek、Kimi 默认打开。其余站点由用户在站点管理器中打开。无法稳定嵌入的站点必须明确降级到普通标签页，不得渲染仿制页面。
 

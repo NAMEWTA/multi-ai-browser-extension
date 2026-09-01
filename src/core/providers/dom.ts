@@ -159,9 +159,16 @@ export function readComposerValue(element: HTMLElement): string {
   }
   const clone = element.cloneNode(true) as HTMLElement;
   for (const placeholder of clone.querySelectorAll(
-    "[data-placeholder], [data-slate-placeholder], [data-slate-zero-width], [class*='placeholder' i]",
+    "[data-slate-placeholder], [data-slate-zero-width], [class*='placeholder' i]",
   )) {
     placeholder.remove();
+  }
+  for (const placeholder of clone.querySelectorAll("[data-placeholder]")) {
+    const isPopulatedEditorBlock =
+      (placeholder.tagName === "P" || placeholder.tagName === "DIV") &&
+      Boolean(normalizeComposerValue(placeholder.textContent ?? ""));
+    if (isPopulatedEditorBlock) placeholder.removeAttribute("data-placeholder");
+    else placeholder.remove();
   }
   return readEditableNode(clone).replace(/\n$/u, "");
 }

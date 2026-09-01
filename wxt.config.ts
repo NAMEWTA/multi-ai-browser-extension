@@ -7,8 +7,8 @@ export default defineConfig({
   manifest: {
     name: "Multi AI Workspace",
     description: "在多个真实 AI 网页中统一发送、并排比较，并保存本地会话历史。",
-    version: "0.0.1.8",
-    version_name: "0.0.1-alpha.8",
+    version: "0.0.1.10",
+    version_name: "0.0.1-alpha.10",
     minimum_chrome_version: "120",
     permissions: ["storage", "tabs", "webNavigation", "declarativeNetRequestWithHostAccess"],
     host_permissions: [...builtInProviderMatches],

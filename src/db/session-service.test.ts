@@ -9,6 +9,7 @@ import {
   getSessionDetail,
   listSessions,
   recordSuccessfulTurn,
+  renameSession,
   setSessionPinned,
   toggleSessionPinned,
   updateSessionWorkspaceSnapshot,
@@ -163,6 +164,27 @@ describe("session history", () => {
     expect((await listSessions()).map((session) => session.id)).toEqual(expected);
     expect((await db.sessions.get("old"))?.lastOpenedAt).not.toBe("2026-08-01T00:00:00.000Z");
     expect((await db.sessions.get("old"))?.contentUpdatedAt).not.toBe("2026-08-01T00:00:00.000Z");
+  });
+
+  it("renames a session without changing its conversation ordering timestamp", async () => {
+    const session = await createSession("原标题", "rename-me");
+
+    const renamed = await renameSession(session.id, "  第一次\r\n对话  ");
+
+    expect(renamed.title).toBe("第一次 对话");
+    expect(renamed.contentUpdatedAt).toBe(session.contentUpdatedAt);
+    expect((await getSessionDetail(session.id))?.session.title).toBe("第一次 对话");
+  });
+
+  it("rejects invalid session rename requests", async () => {
+    const session = await createSession("原标题", "rename-validation");
+
+    await expect(renameSession(session.id, "   ")).rejects.toThrow("会话标题不能为空");
+    await expect(renameSession(session.id, "x".repeat(121))).rejects.toThrow(
+      "会话标题不能超过 120 个字符",
+    );
+    await expect(renameSession("missing", "新标题")).rejects.toThrow("会话不存在");
+    expect((await db.sessions.get(session.id))?.title).toBe("原标题");
   });
 
   it("orders pinned sessions explicitly and restores creation order when unpinned", async () => {

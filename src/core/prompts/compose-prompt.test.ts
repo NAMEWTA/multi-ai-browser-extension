@@ -47,7 +47,7 @@ describe("prompt composition", () => {
     const selected = snapshotSelectedPromptTemplates(templates, ["a", "c"]);
 
     expect(composePrompt({ templates: selected, question: "解释这段代码。" })).toBe(
-      "提示词 A\n先给出结论。\n\n提示词 C\n保持简洁。\n\n用户\n解释这段代码。",
+      "```提示词 A\n先给出结论。\n```\n\n```提示词 C\n保持简洁。\n```\n\n```用户\n解释这段代码。\n```",
     );
   });
 
@@ -57,7 +57,7 @@ describe("prompt composition", () => {
         templates: [{ id: "a", name: "  模板  ", content: " 第一行\r\n第二行 \n" }],
         question: "  问题\r\n第二行  ",
       }),
-    ).toBe("模板\n第一行\n第二行\n\n用户\n问题\n第二行");
+    ).toBe("```模板\n第一行\n第二行\n```\n\n```用户\n问题\n第二行\n```");
   });
 
   it("rejects empty and overlong user questions", () => {

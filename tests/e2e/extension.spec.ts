@@ -21,6 +21,7 @@ const providerHosts = [
   "www.qianwen.com",
   "chat.minimax.io",
   "agent.minimax.io",
+  "www.doubao.com",
 ];
 
 let context: BrowserContext;
@@ -279,17 +280,17 @@ test("keeps sidebar order stable until a session is explicitly pinned", async ()
   await expect(workspace.locator(".history-item").first()).toContainText(currentTitle);
 });
 
-test("manages all seven preconfigured websites and exposes experimental embed status", async () => {
+test("manages all eight preconfigured websites and exposes experimental embed status", async () => {
   await workspace.getByRole("button", { name: "管理站点" }).click();
   const picker = workspace.getByRole("dialog", { name: "管理 AI 网页" });
-  await expect(picker.locator(".provider-option")).toHaveCount(7);
+  await expect(picker.locator(".provider-option")).toHaveCount(8);
   await expect(picker.locator(".provider-option", { hasText: "Coze" })).toContainText("实验性");
-  for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax"]) {
+  for (const name of ["Coze", "ChatGPT", "Claude", "通义千问", "MiniMax", "豆包"]) {
     await picker.getByRole("checkbox", { name: `打开 ${name}` }).check();
   }
   await picker.getByRole("button", { name: "完成" }).click();
-  await expect(workspace.locator("article.provider-panel")).toHaveCount(7);
-  await expect(workspace.locator("article.provider-panel iframe")).toHaveCount(7);
+  await expect(workspace.locator("article.provider-panel")).toHaveCount(8);
+  await expect(workspace.locator("article.provider-panel iframe")).toHaveCount(8);
   await expect
     .poll(
       async () =>
@@ -298,8 +299,8 @@ test("manages all seven preconfigured websites and exposes experimental embed st
           .count(),
       { timeout: 15_000 },
     )
-    .toBe(7);
-  await expect(workspace.locator(".target-summary")).toContainText("发送至 7");
+    .toBe(8);
+  await expect(workspace.locator(".target-summary")).toContainText("发送至 8");
 });
 
 test("selects send targets independently without closing website panels", async () => {
@@ -313,7 +314,7 @@ test("selects send targets independently without closing website panels", async 
   await targets.locator(".target-option[data-provider='coze'] input").uncheck();
   await workspace.locator(".global-composer textarea").click();
 
-  await workspace.locator(".global-composer textarea").fill("只发送到六个站点");
+  await workspace.locator(".global-composer textarea").fill("只发送到七个站点");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   const after = await getSubmitCounts(workspace);
   const cozeIndex = await panels.evaluateAll((items) =>
@@ -323,7 +324,7 @@ test("selects send targets independently without closing website panels", async 
   for (let index = 0; index < after.length; index += 1) {
     if (index !== cozeIndex) expect(after[index]).toBe((before[index] ?? 0) + 1);
   }
-  await expect(workspace.locator("article.provider-panel")).toHaveCount(7);
+  await expect(workspace.locator("article.provider-panel")).toHaveCount(8);
   await expect(
     workspace.locator("article.provider-panel[data-provider='coze'] iframe"),
   ).toHaveAttribute("name", cozeFrameName!);
@@ -346,7 +347,7 @@ test("closes and reopens a website from the site manager", async () => {
   await manager.getByRole("checkbox", { name: "打开 MiniMax" }).check();
   await manager.getByRole("button", { name: "完成" }).click();
   await expect(workspace.locator("article.provider-panel[data-provider='minimax']")).toBeVisible();
-  await expect(workspace.locator(".target-summary")).toContainText("发送至 7");
+  await expect(workspace.locator(".target-summary")).toContainText("发送至 8");
 });
 
 test("keeps a native single-site follow-up independent", async () => {
@@ -383,7 +384,7 @@ test("aborts all sends when one provider fails strict preflight", async () => {
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
   await expect(broken.locator(".panel-status.status-error")).toBeVisible({ timeout: 10_000 });
   expect(await getSubmitCounts(workspace)).toEqual(before);
-  await expect(panels.locator(".panel-status.status-ready")).toHaveCount(6);
+  await expect(panels.locator(".panel-status.status-ready")).toHaveCount(7);
   for (let index = 0; index < (await panels.count()); index += 1) {
     expect(
       await panels
@@ -412,9 +413,9 @@ test("maximizes one website without unmounting the others", async () => {
   const deepseek = workspace.locator("article.provider-panel[data-provider='deepseek']");
   const firstFrameName = await deepseek.locator("iframe").getAttribute("name");
   await deepseek.getByTitle("最大化").click();
-  await expect(workspace.locator("article.provider-panel")).toHaveCount(7);
+  await expect(workspace.locator("article.provider-panel")).toHaveCount(8);
   await expect(deepseek).toBeVisible();
-  await expect(workspace.locator("article.provider-panel.panel-hidden")).toHaveCount(6);
+  await expect(workspace.locator("article.provider-panel.panel-hidden")).toHaveCount(7);
   await deepseek.getByTitle("恢复").click();
   await expect(workspace.locator("article.provider-panel.panel-hidden")).toHaveCount(0);
   await expect(deepseek.locator("iframe")).toHaveAttribute("name", firstFrameName!);
@@ -535,13 +536,33 @@ test("sends the exact A plus C prompt composition to every selected website", as
   await workspace.locator(".global-composer textarea").fill("解释 Go channel");
   await workspace.getByRole("button", { name: "发送", exact: true }).click();
 
-  const expected = "提示词A\n使用表格回答\n\n提示词C\n保持简洁\n\n用户\n解释 Go channel";
+  const expected =
+    "```提示词A\n使用表格回答\n```\n\n```提示词C\n保持简洁\n```\n\n```用户\n解释 Go channel\n```";
   const frames = workspace.locator("article.provider-panel iframe");
   for (let index = 0; index < (await frames.count()); index += 1) {
     await expect(frames.nth(index).contentFrame().locator("[data-last-prompt]")).toHaveText(
       expected,
     );
   }
+});
+
+test("renames a conversation inline and persists the title", async () => {
+  await workspace.getByRole("button", { name: "新任务", exact: true }).click();
+  await workspace.locator(".global-composer textarea").fill("你好");
+  await workspace.getByRole("button", { name: "发送", exact: true }).click();
+
+  const row = workspace.locator(".history-row.active");
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "重命名会话 你好" }).click();
+  const titleInput = row.getByRole("textbox", { name: "会话标题" });
+  await expect(titleInput).toHaveValue("你好");
+  await titleInput.fill("第一次对话");
+  await row.getByRole("button", { name: "保存会话标题" }).click();
+  await expect(row.locator(".history-item")).toContainText("第一次对话");
+
+  await workspace.reload();
+  await expect(workspace.getByRole("button", { name: "新任务", exact: true })).toBeVisible();
+  await expect(workspace.locator(".history-item", { hasText: "第一次对话" })).toBeVisible();
 });
 
 async function getSubmitCounts(page: Page): Promise<number[]> {

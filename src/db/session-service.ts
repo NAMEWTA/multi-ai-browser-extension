@@ -14,6 +14,7 @@ import {
 } from "./database";
 
 const ACTIVE_SESSION_KEY = "active-session-id";
+export const MAX_SESSION_TITLE_LENGTH = 120;
 const TERMINAL_RESPONSE_STATUSES = new Set<ExchangeResponseStatus>([
   "completed",
   "partial",
@@ -75,6 +76,15 @@ function nowIso(): string {
 function titleFromPrompt(prompt: string): string {
   const title = prompt.replace(/\s+/g, " ").trim();
   return title.length > 42 ? `${title.slice(0, 42)}...` : title || "新会话";
+}
+
+function normalizeSessionTitle(title: string): string {
+  const normalized = title.replace(/\s+/gu, " ").trim();
+  if (!normalized) throw new Error("会话标题不能为空");
+  if (Array.from(normalized).length > MAX_SESSION_TITLE_LENGTH) {
+    throw new Error(`会话标题不能超过 ${MAX_SESSION_TITLE_LENGTH} 个字符`);
+  }
+  return normalized;
 }
 
 function emptyWorkspace(timestamp = nowIso()): SessionWorkspaceSnapshot {
@@ -160,6 +170,16 @@ export async function activateSession(id: string): Promise<SessionRecord> {
     await db.metadata.put({ key: ACTIVE_SESSION_KEY, value: id });
     return updated;
   });
+}
+
+export async function renameSession(id: string, title: string): Promise<SessionRecord> {
+  const session = await db.sessions.get(id);
+  if (!session) throw new Error("会话不存在");
+  const normalizedTitle = normalizeSessionTitle(title);
+  if (normalizedTitle === session.title) return session;
+  const updated = await db.sessions.update(id, { title: normalizedTitle });
+  if (!updated) throw new Error("会话不存在");
+  return (await db.sessions.get(id))!;
 }
 
 export async function updateSessionWorkspaceSnapshot(

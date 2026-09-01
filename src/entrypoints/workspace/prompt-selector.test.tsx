@@ -29,8 +29,10 @@ describe("PromptSelector", () => {
     expect(screen.getByRole("checkbox", { name: /提示词C/ })).toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "预览" }));
-    expect(screen.getByRole("dialog", { name: "预览实际发送内容" })).toHaveTextContent(
-      "提示词A 使用表格回答 提示词C 保持简洁 用户 解释 Go channel",
+    expect(
+      screen.getByRole("dialog", { name: "预览实际发送内容" }).querySelector("pre")?.textContent,
+    ).toBe(
+      "```提示词A\n使用表格回答\n```\n\n```提示词C\n保持简洁\n```\n\n```用户\n解释 Go channel\n```",
     );
   });
 

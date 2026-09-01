@@ -17,7 +17,7 @@ Chrome/Chromium 全页扩展工作台：在一个标签页中并排打开多个�
 - 历史可通过版本化 `.maiw.jsonl` 文件整体导入和导出。
 - 站点不能稳定嵌入时，降级到普通浏览器标签页继续统一发送。
 
-预配置站点：DeepSeek、Kimi、Coze、ChatGPT、Claude、通义千问、MiniMax。DeepSeek 与 Kimi 默认打开，其余站点由用户在工作台内添加。
+预配置站点：DeepSeek、Kimi、Coze、ChatGPT、Claude、通义千问、MiniMax、豆包。DeepSeek 与 Kimi 默认打开，其余站点由用户在工作台内添加。
 
 ## 技术栈
 

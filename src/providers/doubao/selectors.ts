@@ -1,0 +1,67 @@
+import type { ProviderSelectors } from "../../core/providers/contracts";
+
+export const doubaoSelectors = {
+  composer: [
+    "div.tiptap.ProseMirror[contenteditable='true'][role='textbox']",
+    "div.ProseMirror[contenteditable='true'][role='textbox']",
+    "[contenteditable='true'][role='textbox']:has([data-placeholder*='发消息'])",
+    "[contenteditable='true'][role='textbox']",
+  ],
+  submit: [
+    "button#flow-end-msg-send:not(:disabled):not([aria-disabled='true']):not([data-disabled='true'])",
+    "button[data-testid='chat_input_send_button']:not(:disabled):not([aria-disabled='true'])",
+    "button[aria-label*='发送']:not(:disabled):not([aria-disabled='true'])",
+    "button[aria-label*='send' i]:not(:disabled):not([aria-disabled='true'])",
+    "button[type='submit']:not(:disabled):not([aria-disabled='true'])",
+  ],
+  login: ["button[class*='login-btn' i]", "button[class*='login' i]", "a[href*='login']"],
+  blocked: [
+    "iframe[src*='captcha' i]:not([hidden]):not([aria-hidden='true'])",
+    "iframe[src*='verify' i]:not([hidden]):not([aria-hidden='true'])",
+    "#captcha_container:not([hidden]):not([aria-hidden='true'])",
+    "[class*='captcha_verify' i]:not([hidden]):not([aria-hidden='true'])",
+    "[class*='captcha-container' i]:not([hidden]):not([aria-hidden='true'])",
+  ],
+  responses: [
+    ".assistant-response",
+    "[data-message-id]:has(.flow-markdown-body)",
+    "[data-local-message-id]:has(.flow-markdown-body)",
+    "[data-testid='receive_message']:has(.flow-markdown-body, [class*='markdown' i])",
+    "[class*='message-block-container']:has(.flow-markdown-body)",
+    ".flow-markdown-body",
+    "[data-role='assistant']",
+    "[class*='assistant-message' i]",
+  ],
+  responseContent: [
+    ".flow-markdown-body",
+    "[data-testid='message_text_content']",
+    "[class*='markdown' i]",
+  ],
+  responseExclude: [
+    "[class*='thinking' i]",
+    "[class*='reasoning' i]",
+    "[class*='search-process' i]",
+    "[class*='reference' i]",
+    "[class*='suggest' i]",
+    "[class*='message-action' i]",
+    "[data-testid*='action']",
+    "[aria-busy='true']",
+  ],
+  generating: [
+    "button[data-testid='chat_input_local_break_button']",
+    "button[class*='break-btn' i]",
+    "button[aria-label*='停止']",
+    "button[aria-label*='stop' i]",
+    "[data-state='loading'][class*='message' i]",
+  ],
+  responseTimeoutMs: 600_000,
+  responseQuietMs: 6_000,
+  responsePollMs: 1_000,
+  newConversation: [
+    "button[aria-label*='新对话']",
+    "a[aria-label*='新对话']",
+    "[role='button'][aria-label*='新对话']",
+    "[data-testid*='new_chat']",
+  ],
+  newConversationLabels: ["新对话", "New chat"],
+} as const satisfies ProviderSelectors;

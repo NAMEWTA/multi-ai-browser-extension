@@ -30,6 +30,10 @@ const fixtures: Record<string, { composer: string; submit: string }> = {
     composer: '<textarea placeholder="Ask anything"></textarea>',
     submit: '<button type="submit"></button>',
   },
+  doubao: {
+    composer: '<div contenteditable="true" role="textbox"></div>',
+    submit: '<button id="flow-end-msg-send" type="button"></button>',
+  },
 };
 
 describe("Provider plugin contract", () => {
@@ -37,13 +41,13 @@ describe("Provider plugin contract", () => {
     document.body.replaceChildren();
   });
 
-  it("auto-discovers the current seven built-in providers", () => {
+  it("auto-discovers the current eight built-in providers", () => {
     expect(
       providerRegistry
         .all()
         .map((plugin) => plugin.definition.id)
         .sort(),
-    ).toEqual(["chatgpt", "claude", "coze", "deepseek", "kimi", "minimax", "qwen"]);
+    ).toEqual(["chatgpt", "claude", "coze", "deepseek", "doubao", "kimi", "minimax", "qwen"]);
   });
 
   it.each(providerRegistry.all().map((plugin) => [plugin.definition.id, plugin] as const))(
@@ -80,6 +84,7 @@ describe("Provider plugin contract", () => {
     expect(providerRegistry.match("https://chat.qwen.ai/c/1")).toBeUndefined();
     expect(providerRegistry.match("https://agent.minimax.io/")?.definition.id).toBe("minimax");
     expect(providerRegistry.match("https://www.coze.cn/")?.definition.id).toBe("coze");
+    expect(providerRegistry.match("https://www.doubao.com/chat/")?.definition.id).toBe("doubao");
     expect(providerRegistry.match("https://example.com/")).toBeUndefined();
   });
 });

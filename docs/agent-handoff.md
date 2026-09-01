@@ -14,6 +14,7 @@
 - DeepSeek：`https://chat.deepseek.com/`
 - Kimi：`https://www.kimi.com/`
 - 通义千问：`https://www.qianwen.com/`
+- 豆包：`https://www.doubao.com/chat/`
 - Coze、ChatGPT、Claude、MiniMax
 
 完整产品、技术和 UI 基线分别见：

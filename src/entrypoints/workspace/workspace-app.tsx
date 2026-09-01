@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   ChevronDown,
   Columns3,
   Copy,
@@ -15,6 +16,7 @@ import {
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Pin,
   PinOff,
   Plus,
@@ -57,7 +59,9 @@ import {
   getActiveSession,
   getSessionDetail,
   listSessions,
+  MAX_SESSION_TITLE_LENGTH,
   recordSuccessfulTurn,
+  renameSession,
   setSessionPinned,
   updateSessionWorkspaceSnapshot,
   type BufferedResponseUpdate,
@@ -101,6 +105,8 @@ export function WorkspaceApp() {
   const [maximized, setMaximized] = useState<string>();
   const [history, setHistory] = useState<SessionRecord[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
+  const [renamingSessionId, setRenamingSessionId] = useState<string>();
+  const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const [details, setDetails] = useState<SessionDetail>();
   const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string }>();
   const [activeSessionId, setActiveSessionId] = useState<string>();
@@ -109,6 +115,7 @@ export function WorkspaceApp() {
   const [layoutResetKey, setLayoutResetKey] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const pendingTurnIdsRef = useRef(new Set<string>());
   const responseBufferRef = useRef(
     new Map<string, Map<string, Omit<ProviderResponseUpdate, "type">>>(),
@@ -119,6 +126,12 @@ export function WorkspaceApp() {
     const timeout = window.setTimeout(() => setNotice(undefined), 3_000);
     return () => window.clearTimeout(timeout);
   }, [notice]);
+
+  useEffect(() => {
+    if (!renamingSessionId) return;
+    renameInputRef.current?.focus();
+    renameInputRef.current?.select();
+  }, [renamingSessionId]);
 
   const refreshHistory = useCallback(async () => {
     setHistory(await listSessions());
@@ -344,6 +357,8 @@ export function WorkspaceApp() {
 
   async function startNewTask() {
     if (sending || startingSession || switchingSession) return;
+    setRenamingSessionId(undefined);
+    setSessionTitleDraft("");
     setStartingSession(true);
     const sessionId = crypto.randomUUID();
     try {
@@ -366,6 +381,8 @@ export function WorkspaceApp() {
 
   async function switchHistory(record: SessionRecord) {
     if (sending || startingSession || switchingSession || record.id === activeSessionId) return;
+    setRenamingSessionId(undefined);
+    setSessionTitleDraft("");
     setSwitchingSession(true);
     try {
       if (activeSessionId) {
@@ -390,6 +407,35 @@ export function WorkspaceApp() {
   async function togglePinned(record: SessionRecord) {
     await setSessionPinned(record.id, !record.pinnedAt);
     await refreshHistory();
+  }
+
+  function beginRename(record: SessionRecord) {
+    setRenamingSessionId(record.id);
+    setSessionTitleDraft(record.title);
+  }
+
+  function cancelRename() {
+    setRenamingSessionId(undefined);
+    setSessionTitleDraft("");
+  }
+
+  async function commitRename(record: SessionRecord) {
+    try {
+      const renamed = await renameSession(record.id, sessionTitleDraft);
+      setHistory((current) =>
+        current.map((session) => (session.id === renamed.id ? renamed : session)),
+      );
+      setDetails((current) =>
+        current?.session.id === renamed.id ? { ...current, session: renamed } : current,
+      );
+      cancelRename();
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: error instanceof Error ? error.message : "会话重命名失败",
+      });
+      renameInputRef.current?.focus();
+    }
   }
 
   async function activeSessionDetail(): Promise<SessionDetail> {
@@ -567,47 +613,96 @@ export function WorkspaceApp() {
             {filteredHistory.length ? (
               filteredHistory.map((record) => (
                 <div
-                  className={`history-row ${activeSessionId === record.id ? "active" : ""}`}
+                  className={`history-row ${activeSessionId === record.id ? "active" : ""} ${renamingSessionId === record.id ? "renaming" : ""}`}
                   key={record.id}
                 >
-                  <button
-                    className="history-item"
-                    type="button"
-                    disabled={switchingSession}
-                    onClick={() => void switchHistory(record)}
-                  >
-                    <span>{record.title}</span>
-                    <small>{formatTime(record.contentUpdatedAt)}</small>
-                  </button>
-                  <div className="history-row-actions">
-                    <button
-                      className={`history-action ${record.pinnedAt ? "is-pinned" : ""}`}
-                      type="button"
-                      title={record.pinnedAt ? "取消置顶" : "置顶会话"}
-                      aria-label={record.pinnedAt ? "取消置顶" : "置顶会话"}
-                      onClick={() => void togglePinned(record)}
+                  {renamingSessionId === record.id ? (
+                    <form
+                      className="history-rename-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void commitRename(record);
+                      }}
                     >
-                      {record.pinnedAt ? <PinOff size={14} /> : <Pin size={14} />}
-                    </button>
-                    <button
-                      className="history-action"
-                      type="button"
-                      title="查看统一对话"
-                      aria-label="查看对话记录"
-                      onClick={() => void openHistory(record)}
-                    >
-                      <MessageSquareText size={14} />
-                    </button>
-                    <button
-                      className="history-action action-danger"
-                      type="button"
-                      title="删除会话"
-                      aria-label="删除记录"
-                      onClick={() => void removeHistory(record)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                      <input
+                        ref={renameInputRef}
+                        value={sessionTitleDraft}
+                        maxLength={MAX_SESSION_TITLE_LENGTH}
+                        aria-label="会话标题"
+                        onChange={(event) => setSessionTitleDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") cancelRename();
+                        }}
+                      />
+                      <button
+                        className="history-action"
+                        type="submit"
+                        title="保存会话标题"
+                        aria-label="保存会话标题"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        className="history-action"
+                        type="button"
+                        title="取消重命名"
+                        aria-label="取消重命名"
+                        onClick={cancelRename}
+                      >
+                        <X size={14} />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <button
+                        className="history-item"
+                        type="button"
+                        disabled={switchingSession}
+                        onClick={() => void switchHistory(record)}
+                      >
+                        <span>{record.title}</span>
+                        <small>{formatTime(record.contentUpdatedAt)}</small>
+                      </button>
+                      <div className="history-row-actions">
+                        <button
+                          className="history-action"
+                          type="button"
+                          title="重命名会话"
+                          aria-label={`重命名会话 ${record.title}`}
+                          onClick={() => beginRename(record)}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          className={`history-action ${record.pinnedAt ? "is-pinned" : ""}`}
+                          type="button"
+                          title={record.pinnedAt ? "取消置顶" : "置顶会话"}
+                          aria-label={record.pinnedAt ? "取消置顶" : "置顶会话"}
+                          onClick={() => void togglePinned(record)}
+                        >
+                          {record.pinnedAt ? <PinOff size={14} /> : <Pin size={14} />}
+                        </button>
+                        <button
+                          className="history-action"
+                          type="button"
+                          title="查看统一对话"
+                          aria-label="查看对话记录"
+                          onClick={() => void openHistory(record)}
+                        >
+                          <MessageSquareText size={14} />
+                        </button>
+                        <button
+                          className="history-action action-danger"
+                          type="button"
+                          title="删除会话"
+                          aria-label="删除记录"
+                          onClick={() => void removeHistory(record)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))
             ) : (
