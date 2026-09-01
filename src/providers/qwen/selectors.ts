@@ -65,6 +65,48 @@ export const qwenSelectors = {
     ".answer-receiving-card",
     ".chat-message-mask",
   ],
+  responseCapture: {
+    turnTiers: [
+      {
+        id: "chat-round",
+        confidence: "canonical",
+        selectors: [
+          ".chat-round[data-chat] [data-chat-answers-wrap]",
+          "[data-chat-answers-wrap].chat-answers-card-wrap",
+        ],
+      },
+      {
+        id: "assistant-answer",
+        confidence: "semantic",
+        selectors: [
+          ".assistant-response",
+          "div.chat-response-message",
+          "div[id^='chat-response-message-']",
+          "[data-role='assistant']",
+        ],
+      },
+      {
+        id: "answer-fallback",
+        confidence: "fallback",
+        selectors: ["div.response-message-content", "[class*='answer-content']"],
+      },
+    ],
+    finalContainers: [
+      ".answer-text.md-text-card",
+      ".response-message-content.phase-answer",
+      ".markdown-body",
+    ],
+    contentBlocks: [".qk-markdown", "[class*='answer-content']"],
+    exclude: [
+      ".answer-meta",
+      "[data-answer-feedback-toolbar]",
+      ".answer-receiving-card",
+      ".chat-message-mask",
+    ],
+    statusOnly: ["[role='status']"],
+    observeAttributes: ["aria-busy", "data-state", "data-chat", "data-chat-answers-wrap"],
+    allowStableCompletionWithoutGenerating: true,
+  },
   generating: [
     ".last-message-item .answer-receiving-card",
     ".answer-receiving-card",

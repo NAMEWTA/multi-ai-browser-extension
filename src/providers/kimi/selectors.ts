@@ -40,6 +40,44 @@ export const kimiSelectors = {
     "[class*='loading']",
     "[aria-busy='true']",
   ],
+  responseCapture: {
+    turnTiers: [
+      {
+        id: "assistant-message",
+        confidence: "canonical",
+        selectors: [
+          "[data-message-id][class*='chat-content-item-assistant']",
+          "[class*='chat-content-item-assistant']",
+        ],
+      },
+      {
+        id: "assistant-semantic",
+        confidence: "semantic",
+        selectors: ["[data-role='assistant']", "[data-message-id]:has([class*='segment-content'])"],
+      },
+      {
+        id: "assistant-fallback",
+        confidence: "fallback",
+        selectors: [".assistant-response", "[class*='segment-assistant']"],
+      },
+    ],
+    finalContainers: ["[class*='segment-content']:not([class*='think']):not([class*='search'])"],
+    contentBlocks: [
+      "[class*='markdown']:not([class*='think'] [class*='markdown']):not([class*='search'] [class*='markdown'])",
+    ],
+    exclude: [
+      "[class*='thinking']",
+      "[class*='reasoning']",
+      "[class*='search-process']",
+      "[class*='search-status']",
+      "[class*='tool-call']",
+      "[class*='loading']",
+      "[aria-busy='true']",
+    ],
+    statusOnly: ["[role='status']"],
+    observeAttributes: ["aria-busy", "data-state", "data-message-id"],
+    allowStableCompletionWithoutGenerating: true,
+  },
   generating: [
     "button[aria-label*='停止']",
     "button[aria-label*='Stop']",

@@ -48,4 +48,27 @@ describe("response content", () => {
       { key: "data-message-id:two", text: "第二条", markdown: "第二条" },
     ]);
   });
+
+  it("does not stop at a narrow heading block when a later selector covers the full answer", () => {
+    document.body.innerHTML = `
+      <article class="response" data-message-id="current">
+        <div class="answer">
+          <div class="markdown"><h1>你好</h1></div>
+          <div class="answer-detail">
+            <p>这是完整回答的第一段。</p>
+            <ul><li>第一项</li><li>最后一项</li></ul>
+          </div>
+        </div>
+      </article>
+    `;
+
+    const [snapshot] = readResponseContent(document, {
+      roots: [".response"],
+      content: [".answer .markdown", ".answer"],
+    });
+
+    expect(snapshot?.markdown).toContain("# 你好");
+    expect(snapshot?.markdown).toContain("这是完整回答的第一段。");
+    expect(snapshot?.text).toContain("最后一项");
+  });
 });

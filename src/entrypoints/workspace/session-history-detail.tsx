@@ -45,6 +45,7 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
   const turns = detail.turns;
   const latestTurnId = turns.at(-1)?.turn.id;
   const timelineRef = useRef<HTMLDivElement>(null);
+  const allowVisibleTurnTrackingRef = useRef(false);
   const turnElementsRef = useRef(new Map<string, HTMLElement>());
   const navigationElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const [activeState, setActiveState] = useState<ActiveTurnState>({
@@ -92,6 +93,7 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
   }, [onClose]);
 
   useLayoutEffect(() => {
+    allowVisibleTurnTrackingRef.current = false;
     if (latestTurnId)
       scrollToTurn(timelineRef.current, turnElementsRef.current, latestTurnId, "auto");
   }, [detail.session.id, latestTurnId]);
@@ -111,6 +113,7 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
     const visibleTurns = new Set<HTMLElement>();
     const observer = new IntersectionObserver(
       (entries) => {
+        if (!allowVisibleTurnTrackingRef.current) return;
         for (const entry of entries) {
           const element = entry.target as HTMLElement;
           if (entry.isIntersecting) visibleTurns.add(element);
@@ -234,7 +237,17 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
 
         {turns.length ? (
           <div className="unified-history-layout">
-            <div className="unified-history-timeline" ref={timelineRef} onScroll={updateActiveTurn}>
+            <div
+              className="unified-history-timeline"
+              ref={timelineRef}
+              onScroll={updateActiveTurn}
+              onWheel={() => {
+                allowVisibleTurnTrackingRef.current = true;
+              }}
+              onPointerDown={() => {
+                allowVisibleTurnTrackingRef.current = true;
+              }}
+            >
               {turns.map(({ turn, exchanges }) => (
                 <article
                   className="unified-turn-record"
@@ -375,7 +388,7 @@ function ExchangeRecord({
           {definition.shortName}
         </span>
         <strong>{exchange.providerName}</strong>
-        <span className={`unified-delivery-status status-${exchange.responseStatus}`}>
+        <span className={`unified-delivery-status status-${exchangeStatusTone(exchange)}`}>
           {exchangeStatusLabel(exchange)}
         </span>
         <ChevronDown className="unified-exchange-chevron" size={16} aria-hidden="true" />
@@ -447,6 +460,16 @@ function exchangeStatusLabel(exchange: ProviderExchangeRecord): string {
       }[exchange.submitStatus] ?? "已发送"
     );
   }
+  if (
+    exchange.responseStatus === "completed" &&
+    !exchange.responseMarkdown &&
+    !exchange.responseText
+  ) {
+    return "未采集到正文";
+  }
+  if (exchange.terminalReason === "interrupted") return "已停止 · 部分回复";
+  if (exchange.terminalReason === "uncertain-final") return "终态未确认";
+  if (exchange.terminalReason === "aborted") return "已取消 · 部分回复";
   return {
     waiting: "等待回复",
     streaming: "回复中",
@@ -456,6 +479,26 @@ function exchangeStatusLabel(exchange: ProviderExchangeRecord): string {
     failed: "采集失败",
     unsupported: "暂不支持采集",
   }[exchange.responseStatus];
+}
+
+function exchangeStatusTone(
+  exchange: ProviderExchangeRecord,
+): ProviderExchangeRecord["responseStatus"] {
+  if (
+    exchange.responseStatus === "completed" &&
+    !exchange.responseMarkdown &&
+    !exchange.responseText
+  ) {
+    return "failed";
+  }
+  if (
+    exchange.terminalReason === "interrupted" ||
+    exchange.terminalReason === "uncertain-final" ||
+    exchange.terminalReason === "aborted"
+  ) {
+    return "partial";
+  }
+  return exchange.responseStatus;
 }
 
 function responsePlaceholder(status: ProviderExchangeRecord["responseStatus"]): string {

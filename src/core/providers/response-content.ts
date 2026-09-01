@@ -1,6 +1,7 @@
 import TurndownService from "turndown";
 // @ts-expect-error turndown-plugin-gfm does not ship TypeScript declarations
 import { gfm } from "turndown-plugin-gfm";
+import type { ResponseSelectorTier } from "./contracts";
 import { isElementVisible, normalizeComposerValue } from "./dom";
 
 const DEFAULT_EXCLUDE_SELECTORS = [
@@ -31,14 +32,26 @@ const DEFAULT_KEY_ATTRIBUTES = [
 export interface ResponseContentSnapshot {
   readonly element: HTMLElement;
   readonly key: string;
+  readonly candidateId: string;
+  readonly tierId: string;
+  readonly tierIndex: number;
+  readonly source: "final-container" | "block-union" | "turn-fallback";
+  readonly blockCount: number;
+  readonly quality: number;
+  readonly hasFinalContainer: boolean;
+  readonly statusOnly: boolean;
   readonly text: string;
   readonly markdown: string;
 }
 
 export interface ResponseContentOptions {
   readonly roots: readonly string[];
+  readonly tiers?: readonly ResponseSelectorTier[];
   readonly content?: readonly string[];
+  readonly finalContainers?: readonly string[];
+  readonly contentBlocks?: readonly string[];
   readonly exclude?: readonly string[];
+  readonly statusOnly?: readonly string[];
   readonly getKey?: (element: HTMLElement, index: number) => string | undefined;
 }
 
@@ -46,28 +59,42 @@ export function readResponseContent(
   document: Document,
   options: ResponseContentOptions,
 ): ResponseContentSnapshot[] {
-  const roots = queryDistinctVisibleElements(document, options.roots);
+  const discovered = discoverResponseRoots(document, options);
   const occurrences = new Map<string, number>();
-  return roots.map((element, index) => {
+  return discovered.elements.map((element, index) => {
     const identity =
       options.getKey?.(element, index) ?? responseElementIdentity(element) ?? `index:${index}`;
     const occurrence = occurrences.get(identity) ?? 0;
     occurrences.set(identity, occurrence + 1);
-    const content = cloneResponseContent(element, options);
+    const candidate = cloneResponseContent(element, options);
+    const text = normalizeComposerValue(
+      candidate.content.innerText ?? candidate.content.textContent ?? "",
+    );
     return {
       element,
       key: occurrence ? `${identity}#${occurrence}` : identity,
-      text: normalizeComposerValue(content.innerText ?? content.textContent ?? ""),
-      markdown: responseContentToMarkdown(content),
+      candidateId: `${discovered.tier.id}:${candidate.source}`,
+      tierId: discovered.tier.id,
+      tierIndex: discovered.tierIndex,
+      source: candidate.source,
+      blockCount: candidate.blockCount,
+      quality: candidateQuality(discovered.tier, discovered.tierIndex, candidate, text),
+      hasFinalContainer: candidate.source === "final-container",
+      statusOnly: !text,
+      text,
+      markdown: responseContentToMarkdown(candidate.content),
     };
   });
 }
 
 export function responseElementToMarkdown(
   root: HTMLElement,
-  options: Pick<ResponseContentOptions, "content" | "exclude"> = {},
+  options: Pick<
+    ResponseContentOptions,
+    "content" | "finalContainers" | "contentBlocks" | "exclude" | "statusOnly"
+  > = {},
 ): string {
-  return responseContentToMarkdown(cloneResponseContent(root, options));
+  return responseContentToMarkdown(cloneResponseContent(root, options).content);
 }
 
 function responseContentToMarkdown(content: HTMLElement): string {
@@ -80,13 +107,33 @@ function responseContentToMarkdown(content: HTMLElement): string {
 
 function cloneResponseContent(
   root: HTMLElement,
-  options: Pick<ResponseContentOptions, "content" | "exclude">,
-): HTMLElement {
-  const content = queryContentElements(root, options.content);
+  options: Pick<
+    ResponseContentOptions,
+    "content" | "finalContainers" | "contentBlocks" | "exclude" | "statusOnly"
+  >,
+): {
+  content: HTMLElement;
+  source: ResponseContentSnapshot["source"];
+  blockCount: number;
+} {
+  const finalContainers = queryContentElements(root, options.finalContainers, false);
+  const blockSelectors = options.contentBlocks ?? options.content;
+  const blocks = finalContainers.length
+    ? finalContainers
+    : queryContentElements(root, blockSelectors, false);
+  const content = blocks.length ? blocks : [root];
   const wrapper = root.ownerDocument.createElement("div");
   for (const element of content) wrapper.append(element.cloneNode(true));
-  removeExcludedContent(wrapper, options.exclude);
-  return wrapper;
+  removeExcludedContent(wrapper, [...(options.exclude ?? []), ...(options.statusOnly ?? [])]);
+  return {
+    content: wrapper,
+    source: finalContainers.length
+      ? "final-container"
+      : blocks.length
+        ? "block-union"
+        : "turn-fallback",
+    blockCount: content.length,
+  };
 }
 
 function createTurndownService() {
@@ -111,34 +158,71 @@ function queryDistinctVisibleElements(
   for (const selector of selectors) {
     for (const candidate of document.querySelectorAll(selector)) {
       if (!(candidate instanceof HTMLElement) || !isElementVisible(candidate)) continue;
-      if (
-        selected.some(
-          (existing) =>
-            existing === candidate || existing.contains(candidate) || candidate.contains(existing),
-        )
-      ) {
-        continue;
-      }
-      selected.push(candidate);
+      if (!selected.includes(candidate)) selected.push(candidate);
     }
   }
-  return selected.toSorted(compareDocumentOrder);
+  return selected
+    .filter(
+      (element) =>
+        !selected.some((candidate) => candidate !== element && candidate.contains(element)),
+    )
+    .toSorted(compareDocumentOrder);
 }
 
 function queryContentElements(
   root: HTMLElement,
   selectors: readonly string[] | undefined,
+  fallbackToRoot = true,
 ): HTMLElement[] {
-  if (!selectors?.length) return [root];
+  if (!selectors?.length) return fallbackToRoot ? [root] : [];
+  const matches: HTMLElement[] = [];
   for (const selector of selectors) {
-    const matches = [
+    const selectorMatches = [
       ...(root.matches(selector) ? [root] : []),
       ...root.querySelectorAll<HTMLElement>(selector),
     ].filter((element) => isElementVisible(element));
-    if (matches.length)
-      return matches.filter((element, index) => matches.indexOf(element) === index);
+    for (const element of selectorMatches) {
+      if (!matches.includes(element)) matches.push(element);
+    }
   }
-  return [root];
+  if (!matches.length) return fallbackToRoot ? [root] : [];
+  return matches
+    .filter(
+      (element) =>
+        !matches.some((candidate) => candidate !== element && candidate.contains(element)),
+    )
+    .toSorted(compareDocumentOrder);
+}
+
+function discoverResponseRoots(
+  document: Document,
+  options: Pick<ResponseContentOptions, "roots" | "tiers">,
+): { elements: HTMLElement[]; tier: ResponseSelectorTier; tierIndex: number } {
+  const tiers = options.tiers?.length
+    ? options.tiers
+    : [{ id: "legacy", confidence: "fallback" as const, selectors: options.roots }];
+  for (const [tierIndex, tier] of tiers.entries()) {
+    const elements = queryDistinctVisibleElements(document, tier.selectors);
+    if (elements.length) return { elements, tier, tierIndex };
+  }
+  return { elements: [], tier: tiers[0]!, tierIndex: 0 };
+}
+
+function candidateQuality(
+  tier: ResponseSelectorTier,
+  tierIndex: number,
+  candidate: Pick<ResponseContentSnapshot, "source" | "blockCount">,
+  text: string,
+): number {
+  const confidence = { canonical: 3, semantic: 2, fallback: 1 }[tier.confidence];
+  const source = { "final-container": 3, "block-union": 2, "turn-fallback": 1 }[candidate.source];
+  return (
+    confidence * 1_000_000 +
+    source * 100_000 -
+    tierIndex * 1_000 +
+    Math.min(candidate.blockCount, 99) * 100 +
+    Math.min(text.length, 99)
+  );
 }
 
 function responseElementIdentity(element: HTMLElement): string | undefined {

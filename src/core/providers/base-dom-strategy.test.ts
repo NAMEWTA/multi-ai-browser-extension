@@ -28,6 +28,24 @@ class TestStrategy extends BaseDomStrategy {
   }
 }
 
+class PlannedCaptureStrategy extends BaseDomStrategy {
+  constructor() {
+    super(definition, {
+      composer: ["#composer"],
+      submit: ["#send"],
+      responses: [".turn"],
+      responseQuietMs: 100,
+      responsePollMs: 20,
+      responseCapture: {
+        turnTiers: [{ id: "turn", confidence: "canonical", selectors: [".turn"] }],
+        finalContainers: [".final"],
+        contentBlocks: [".block"],
+        allowStableCompletionWithoutGenerating: true,
+      },
+    });
+  }
+}
+
 describe("BaseDomStrategy", () => {
   it("reports a website login state", async () => {
     document.body.innerHTML = '<a id="login">Login</a>';
@@ -208,6 +226,7 @@ describe("BaseDomStrategy", () => {
       await vi.advanceTimersByTimeAsync(2_250);
       await expect(capture).resolves.toEqual({
         status: "completed",
+        terminalReason: "completed",
         text: "最终回复",
         markdown: "最终回复",
       });
@@ -215,6 +234,72 @@ describe("BaseDomStrategy", () => {
         status: "streaming",
         text: "最终回复",
         markdown: "最终回复",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not complete a title-only block before a canonical final container appears", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <div class="turn" data-message-id="current">
+          <div class="block"><h1>你好</h1></div>
+        </div>
+      `;
+      const strategy = new PlannedCaptureStrategy();
+      const capture = strategy.captureResponse(
+        { document, window, responseTimeoutMs: 1_000 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+
+      await vi.advanceTimersByTimeAsync(400);
+      let settled = false;
+      void capture.finally(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      document.querySelector(".turn")!.innerHTML = `
+        <div class="final">
+          <div class="block"><h1>你好</h1></div>
+          <p>这是完整正文。</p>
+        </div>
+      `;
+      await vi.advanceTimersByTimeAsync(400);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        terminalReason: "completed",
+        text: expect.stringContaining("这是完整正文"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a title-only block as uncertain partial at the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <div class="turn" data-message-id="current">
+          <div class="block"><h1>你好</h1></div>
+        </div>
+      `;
+      const capture = new PlannedCaptureStrategy().captureResponse(
+        { document, window, responseTimeoutMs: 500 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+
+      await vi.advanceTimersByTimeAsync(501);
+      await expect(capture).resolves.toMatchObject({
+        status: "partial",
+        terminalReason: "uncertain-final",
+        text: "你好",
       });
     } finally {
       vi.useRealTimers();

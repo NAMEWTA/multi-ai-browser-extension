@@ -255,4 +255,111 @@ describe("session history", () => {
     await applyResponseUpdate(turn.id, "panel-k", "timeout", undefined, "等待超时");
     expect((await getSessionDetail(session.id))?.turns[0]?.turn.status).toBe("partial");
   });
+
+  it("keeps a completed revision when stale or nonterminal updates arrive later", async () => {
+    const session = await createSession("乱序回复");
+    const turn = await recordSuccessfulTurn(
+      session.id,
+      "保持最终正文",
+      [targets[0]!],
+      [{ panelId: "panel-ds", status: "submitted" }],
+    );
+    const observedAt = "2026-09-01T08:00:00.000Z";
+    const metadata = (revision: number, terminalReason?: "completed") => ({
+      captureId: "capture-1",
+      revision,
+      observedAt,
+      ...(terminalReason ? { terminalReason } : {}),
+    });
+
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "streaming",
+      "# 你好",
+      undefined,
+      "# 你好",
+      metadata(7),
+    );
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "completed",
+      "你好\n这是完整回答\nEND-SENTINEL",
+      undefined,
+      "# 你好\n\n这是完整回答\n\nEND-SENTINEL",
+      metadata(8, "completed"),
+    );
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "streaming",
+      "# 你好",
+      undefined,
+      "# 你好",
+      metadata(7),
+    );
+    await applyResponseUpdate(
+      turn.id,
+      "panel-ds",
+      "streaming",
+      "错误的后续流",
+      undefined,
+      "错误的后续流",
+      metadata(9),
+    );
+    await applyResponseUpdate(turn.id, "panel-ds", "completed", "另一采集", undefined, "另一采集", {
+      ...metadata(99, "completed"),
+      captureId: "capture-2",
+    });
+
+    const exchange = (await getSessionDetail(session.id))?.turns[0]?.exchanges[0];
+    expect(exchange).toMatchObject({
+      responseStatus: "completed",
+      captureId: "capture-1",
+      responseRevision: 8,
+      terminalReason: "completed",
+      responseText: expect.stringContaining("END-SENTINEL"),
+      responseMarkdown: expect.stringContaining("END-SENTINEL"),
+    });
+  });
+
+  it("reduces buffered responses by revision before creating exchanges", async () => {
+    const session = await createSession("早到乱序回复");
+    const turn = await recordSuccessfulTurn(
+      session.id,
+      "缓冲最终正文",
+      [targets[0]!],
+      [{ panelId: "panel-ds", status: "submitted" }],
+      [
+        {
+          panelId: "panel-ds",
+          status: "completed",
+          captureId: "capture-buffered",
+          revision: 8,
+          observedAt: "2026-09-01T08:00:08.000Z",
+          terminalReason: "completed",
+          responseText: "完整缓冲回答",
+          responseMarkdown: "## 完整缓冲回答",
+        },
+        {
+          panelId: "panel-ds",
+          status: "streaming",
+          captureId: "capture-buffered",
+          revision: 7,
+          observedAt: "2026-09-01T08:00:07.000Z",
+          responseText: "# 你好",
+          responseMarkdown: "# 你好",
+        },
+      ],
+    );
+
+    expect((await getSessionDetail(session.id))?.turns[0]?.exchanges[0]).toMatchObject({
+      turnId: turn.id,
+      responseStatus: "completed",
+      responseRevision: 8,
+      responseText: "完整缓冲回答",
+      responseMarkdown: "## 完整缓冲回答",
+    });
+  });
 });

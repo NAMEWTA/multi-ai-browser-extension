@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { browser } from "wxt/browser";
 import type { ProviderResponseUpdate, ProviderRunResult } from "../../core/messaging/protocol";
+import { mergeResponseRevision } from "../../core/messaging/response-revision";
 import {
   workspaceFrameStatusSchema,
   workspacePanelUrlUpdateSchema,
@@ -120,6 +121,7 @@ export function WorkspaceApp() {
   const responseBufferRef = useRef(
     new Map<string, Map<string, Omit<ProviderResponseUpdate, "type">>>(),
   );
+  const responseRevisionRef = useRef(new Map<string, Omit<ProviderResponseUpdate, "type">>());
 
   useEffect(() => {
     if (!notice) return;
@@ -212,7 +214,12 @@ export function WorkspaceApp() {
 
       const response = workspaceResponseUpdateSchema.safeParse(raw);
       if (!response.success) return undefined;
-      const data = response.data;
+      const rawData = response.data;
+      const revisionKey = JSON.stringify([rawData.turnId, rawData.panelId]);
+      const currentRevision = responseRevisionRef.current.get(revisionKey);
+      const data = mergeResponseRevision(currentRevision, rawData);
+      if (currentRevision && data === currentRevision) return { ok: true };
+      responseRevisionRef.current.set(revisionKey, data);
       setPanelStatus(
         data.panelId,
         data.status === "waiting" || data.status === "streaming"
@@ -224,7 +231,7 @@ export function WorkspaceApp() {
       );
       if (pendingTurnIdsRef.current.has(data.turnId)) {
         const byPanel = responseBufferRef.current.get(data.turnId) ?? new Map();
-        byPanel.set(data.panelId, data);
+        byPanel.set(data.panelId, mergeResponseRevision(byPanel.get(data.panelId), data));
         responseBufferRef.current.set(data.turnId, byPanel);
         return { ok: true };
       }
@@ -1478,9 +1485,13 @@ function toBufferedResponseUpdate(
   return {
     panelId: update.panelId,
     status: update.status,
+    captureId: update.captureId,
+    revision: update.revision,
+    observedAt: update.observedAt,
     ...(update.text !== undefined ? { responseText: update.text } : {}),
     ...(update.markdown !== undefined ? { responseMarkdown: update.markdown } : {}),
     ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(update.terminalReason !== undefined ? { terminalReason: update.terminalReason } : {}),
   };
 }
 
@@ -1494,6 +1505,12 @@ async function persistResponseUpdate(
     update.text,
     update.message,
     update.markdown,
+    {
+      captureId: update.captureId,
+      revision: update.revision,
+      observedAt: update.observedAt,
+      ...(update.terminalReason ? { terminalReason: update.terminalReason } : {}),
+    },
   );
 }
 

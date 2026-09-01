@@ -170,7 +170,7 @@ describe("KimiStrategy", () => {
       submit.classList.remove("stop");
       submit.classList.add("disabled");
       submit.setAttribute("aria-disabled", "true");
-      await vi.advanceTimersByTimeAsync(8_002);
+      await vi.advanceTimersByTimeAsync(8_300);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
         text: expect.stringContaining("当前回答"),

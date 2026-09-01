@@ -87,16 +87,32 @@ export const responseCaptureStatusSchema = z.enum([
   "unsupported",
 ]);
 
+export const responseTerminalReasonSchema = z.enum([
+  "completed",
+  "interrupted",
+  "aborted",
+  "timeout",
+  "navigation",
+  "verification",
+  "uncertain-final",
+  "failed",
+  "unsupported",
+]);
+
 export const providerResponseUpdateSchema = z.object({
   type: z.literal("PROVIDER_RESPONSE_UPDATE"),
   panelId: z.string().min(1),
   providerId: providerIdSchema,
   sessionId: z.string().min(1),
   turnId: z.string().min(1),
+  captureId: z.string().min(1).max(100),
+  revision: z.number().int().positive(),
+  observedAt: z.iso.datetime(),
   status: responseCaptureStatusSchema,
   text: z.string().max(2_000_000).optional(),
   markdown: z.string().max(2_000_000).optional(),
   message: z.string().max(1_000).optional(),
+  terminalReason: responseTerminalReasonSchema.optional(),
 });
 
 export const workspaceResponseUpdateSchema = providerResponseUpdateSchema.extend({
@@ -163,6 +179,10 @@ export const providerDiagnosticSchema = z
     composerCandidates: z.array(composerCandidateDiagnosticSchema).max(12).optional(),
     submit: z.string().max(300).optional(),
     errorCode: z.enum(providerErrorCodes).optional(),
+    responseRevision: z.number().int().positive().optional(),
+    responseStatus: responseCaptureStatusSchema.optional(),
+    responseLength: z.number().int().nonnegative().max(2_000_000).optional(),
+    terminalReason: responseTerminalReasonSchema.optional(),
   })
   .strict();
 

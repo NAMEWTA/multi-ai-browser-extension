@@ -69,6 +69,8 @@ export default defineContentScript({
     const reportResponse = async (
       command: CommitPromptMessage,
       update: ResponseCaptureUpdate,
+      captureId: string,
+      revision: number,
     ): Promise<void> => {
       await browser.runtime
         .sendMessage({
@@ -77,15 +79,23 @@ export default defineContentScript({
           providerId: plugin.definition.id,
           sessionId: command.sessionId,
           turnId: command.turnId,
+          captureId,
+          revision,
+          observedAt: new Date().toISOString(),
           status: update.status,
           ...(update.text !== undefined ? { text: update.text } : {}),
           ...(update.markdown !== undefined ? { markdown: update.markdown } : {}),
           ...(update.message ? { message: update.message } : {}),
+          ...(update.terminalReason ? { terminalReason: update.terminalReason } : {}),
         })
         .catch(() => undefined);
       void appendProviderDiagnostic(panelId, plugin.definition.id, {
         stage: "response-update",
         operation: "response",
+        responseRevision: revision,
+        responseStatus: update.status,
+        responseLength: update.text?.length ?? update.markdown?.length ?? 0,
+        ...(update.terminalReason ? { terminalReason: update.terminalReason } : {}),
       }).catch(() => undefined);
     };
 
@@ -94,16 +104,21 @@ export default defineContentScript({
       baseline: ResponseBaseline,
       signal: AbortSignal,
     ): Promise<void> => {
+      const captureId = crypto.randomUUID();
+      let revision = 0;
+      const report = (update: ResponseCaptureUpdate) =>
+        reportResponse(command, update, captureId, ++revision);
       try {
-        await reportResponse(command, { status: "waiting" });
+        await report({ status: "waiting" });
         const final = await strategy.captureResponse({ ...ctx, signal }, baseline, (update) =>
-          reportResponse(command, update),
+          report(update),
         );
-        await reportResponse(command, final);
+        await report(final);
       } catch (error) {
         const normalized = normalizeProviderError(error);
-        await reportResponse(command, {
+        await report({
           status: "failed",
+          terminalReason: "failed",
           message: normalized.message,
         });
       }

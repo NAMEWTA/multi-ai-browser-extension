@@ -133,6 +133,31 @@ describe("Markdown transcripts", () => {
     expect(markdown).toContain("> 回复状态：partial");
   });
 
+  it("keeps the terminal revision Markdown intact and records an interrupted reason", () => {
+    const detail = createDetail();
+    const latest = detail.turns.find(({ turn }) => turn.id === "turn-2")!;
+    latest.exchanges[1] = exchange({
+      id: "exchange-interrupted",
+      turnId: "turn-2",
+      panelId: "panel-kimi",
+      providerId: "kimi",
+      providerName: "Kimi",
+      targetIndex: 0,
+      submitStatus: "submitted",
+      responseStatus: "partial",
+      terminalReason: "interrupted",
+      captureId: "capture-1",
+      responseRevision: 8,
+      responseText: "LINE-001\nMID-SENTINEL\nEND-SENTINEL",
+      responseMarkdown: "# 完整回答\n\nLINE-001\n\nMID-SENTINEL\n\nEND-SENTINEL",
+    });
+
+    const artifact = createProviderLatestExchangeTranscript(detail, { providerId: "kimi" });
+    expect(artifact.text).toContain("# 完整回答\n\nLINE-001\n\nMID-SENTINEL\n\nEND-SENTINEL");
+    expect(artifact.text).toContain("> 回复已停止，已保留停止前的内容。");
+    expect(artifact.text).toContain("> 终止原因：用户停止");
+  });
+
   it("uses the original question for navigation text and prefers captured Markdown", () => {
     const detail = createDetail();
     const latest = detail.turns.find(({ turn }) => turn.id === "turn-2")!;

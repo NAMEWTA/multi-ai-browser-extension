@@ -61,6 +61,7 @@ describe("SessionHistoryDetail", () => {
     render(<SessionHistoryDetail detail={createDetail()} onClose={vi.fn()} onTransfer={vi.fn()} />);
 
     const firstTurn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    fireEvent.pointerDown(document.querySelector(".unified-history-timeline")!);
     act(() => {
       observerCallback?.(
         [{ isIntersecting: true, target: firstTurn } as unknown as IntersectionObserverEntry],
@@ -124,6 +125,26 @@ describe("SessionHistoryDetail", () => {
     expect(screen.queryByRole("navigation", { name: "问题导航" })).not.toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes interrupted, uncertain, and empty completed responses", () => {
+    const detail = createDetail();
+    const first = detail.turns[0]!.exchanges[0]!;
+    first.responseStatus = "partial";
+    first.terminalReason = "interrupted";
+    const second = detail.turns[0]!.exchanges[1]!;
+    second.responseStatus = "partial";
+    second.terminalReason = "uncertain-final";
+    const latest = detail.turns[1]!.exchanges[0]!;
+    delete latest.responseText;
+    delete latest.responseMarkdown;
+
+    render(<SessionHistoryDetail detail={detail} onClose={vi.fn()} onTransfer={vi.fn()} />);
+
+    expect(screen.getByText("已停止 · 部分回复")).toBeVisible();
+    expect(screen.getByText("终态未确认")).toBeVisible();
+    expect(screen.getByText("未采集到正文")).toBeVisible();
+    expect(screen.getByText("未采集到正文")).toHaveClass("status-failed");
   });
 });
 

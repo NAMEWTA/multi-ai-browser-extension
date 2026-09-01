@@ -47,6 +47,52 @@ export const doubaoSelectors = {
     "[data-testid*='action']",
     "[aria-busy='true']",
   ],
+  responseCapture: {
+    turnTiers: [
+      {
+        id: "assistant-message",
+        confidence: "canonical",
+        selectors: [
+          "[data-message-id]:has(.flow-markdown-body)",
+          "[data-local-message-id]:has(.flow-markdown-body)",
+          "[data-testid='receive_message']:has(.flow-markdown-body, [class*='markdown' i])",
+        ],
+      },
+      {
+        id: "assistant-semantic",
+        confidence: "semantic",
+        selectors: [
+          ".assistant-response",
+          "[data-role='assistant']",
+          "[class*='assistant-message' i]",
+        ],
+      },
+      {
+        id: "answer-fallback",
+        confidence: "fallback",
+        selectors: [".flow-markdown-body", "[class*='message-block-container']"],
+      },
+    ],
+    finalContainers: [
+      ".flow-markdown-body",
+      "[data-testid='message_text_content']",
+      "[class*='markdown' i]",
+    ],
+    contentBlocks: [".flow-markdown-body", "[data-testid='message_text_content']"],
+    exclude: [
+      "[class*='thinking' i]",
+      "[class*='reasoning' i]",
+      "[class*='search-process' i]",
+      "[class*='reference' i]",
+      "[class*='suggest' i]",
+      "[class*='message-action' i]",
+      "[data-testid*='action']",
+      "[aria-busy='true']",
+    ],
+    statusOnly: ["[role='status']"],
+    observeAttributes: ["aria-busy", "data-state", "data-message-id", "data-local-message-id"],
+    allowStableCompletionWithoutGenerating: true,
+  },
   generating: [
     "button[data-testid='chat_input_local_break_button']",
     "button[class*='break-btn' i]",

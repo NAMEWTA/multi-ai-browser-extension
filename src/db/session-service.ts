@@ -1,4 +1,4 @@
-import type { ProviderId } from "../core/providers/contracts";
+import type { ProviderId, ResponseTerminalReason } from "../core/providers/contracts";
 import { providerRegistry } from "../core/providers/registry";
 import {
   db,
@@ -47,9 +47,20 @@ export interface SubmitResultLike {
 export interface BufferedResponseUpdate {
   panelId: string;
   status: ExchangeResponseStatus;
+  captureId?: string;
+  revision?: number;
+  observedAt?: string;
+  terminalReason?: ResponseTerminalReason;
   responseText?: string;
   responseMarkdown?: string;
   message?: string;
+}
+
+export interface ResponseRevisionMetadata {
+  captureId: string;
+  revision: number;
+  observedAt: string;
+  terminalReason?: ResponseTerminalReason;
 }
 
 export interface TurnPromptMetadata {
@@ -63,6 +74,23 @@ export interface SessionDetail {
     turn: TurnRecord;
     exchanges: ProviderExchangeRecord[];
   }>;
+}
+
+function canApplyBufferedResponse(
+  current: BufferedResponseUpdate,
+  incoming: BufferedResponseUpdate,
+): boolean {
+  if (current.captureId && incoming.captureId && current.captureId !== incoming.captureId) {
+    return false;
+  }
+  if (
+    current.revision !== undefined &&
+    incoming.revision !== undefined &&
+    incoming.revision <= current.revision
+  ) {
+    return false;
+  }
+  return current.revision === undefined || !TERMINAL_RESPONSE_STATUSES.has(current.status);
 }
 
 export type SessionWorkspaceInput = Omit<SessionWorkspaceSnapshot, "updatedAt"> & {
@@ -218,12 +246,33 @@ export async function recordSuccessfulTurn(
   const latestResponseByPanel = new Map<string, BufferedResponseUpdate>();
   for (const update of responseUpdates) {
     const previous = latestResponseByPanel.get(update.panelId);
+    if (previous && !canApplyBufferedResponse(previous, update)) continue;
     const responseText = update.responseText ?? previous?.responseText;
     const responseMarkdown = update.responseMarkdown ?? previous?.responseMarkdown;
     const message = update.message ?? previous?.message;
     latestResponseByPanel.set(update.panelId, {
       panelId: update.panelId,
       status: update.status,
+      ...(update.captureId !== undefined
+        ? { captureId: update.captureId }
+        : previous?.captureId !== undefined
+          ? { captureId: previous.captureId }
+          : {}),
+      ...(update.revision !== undefined
+        ? { revision: update.revision }
+        : previous?.revision !== undefined
+          ? { revision: previous.revision }
+          : {}),
+      ...(update.observedAt !== undefined
+        ? { observedAt: update.observedAt }
+        : previous?.observedAt !== undefined
+          ? { observedAt: previous.observedAt }
+          : {}),
+      ...(update.terminalReason !== undefined
+        ? { terminalReason: update.terminalReason }
+        : previous?.terminalReason !== undefined
+          ? { terminalReason: previous.terminalReason }
+          : {}),
       ...(responseText !== undefined ? { responseText } : {}),
       ...(responseMarkdown !== undefined ? { responseMarkdown } : {}),
       ...(message !== undefined ? { message } : {}),
@@ -254,6 +303,12 @@ export async function recordSuccessfulTurn(
         ...(response?.responseText !== undefined ? { responseText: response.responseText } : {}),
         ...(response?.responseMarkdown !== undefined
           ? { responseMarkdown: response.responseMarkdown }
+          : {}),
+        ...(response?.captureId !== undefined ? { captureId: response.captureId } : {}),
+        ...(response?.revision !== undefined ? { responseRevision: response.revision } : {}),
+        ...(response?.observedAt !== undefined ? { responseObservedAt: response.observedAt } : {}),
+        ...(response?.terminalReason !== undefined
+          ? { terminalReason: response.terminalReason }
           : {}),
         ...(message !== undefined ? { message } : {}),
         ...(submitStatus !== "submitted" || TERMINAL_RESPONSE_STATUSES.has(responseStatus)
@@ -318,6 +373,7 @@ export async function applyResponseUpdate(
   responseText?: string,
   message?: string,
   responseMarkdown?: string,
+  metadata?: ResponseRevisionMetadata,
 ): Promise<void> {
   const timestamp = nowIso();
   await db.transaction("rw", db.sessions, db.turns, db.exchanges, async () => {
@@ -329,12 +385,32 @@ export async function applyResponseUpdate(
       .filter((item) => item.panelId === panelId)
       .first();
     if (!exchange) return;
+    if (metadata) {
+      if (exchange.captureId && exchange.captureId !== metadata.captureId) return;
+      if (
+        exchange.responseRevision !== undefined &&
+        metadata.revision <= exchange.responseRevision
+      ) {
+        return;
+      }
+      if (TERMINAL_RESPONSE_STATUSES.has(exchange.responseStatus)) return;
+    }
 
     await db.exchanges.update(exchange.id, {
       responseStatus: status,
       ...(responseText !== undefined ? { responseText } : {}),
       ...(responseMarkdown !== undefined ? { responseMarkdown } : {}),
       ...(message !== undefined ? { message } : {}),
+      ...(metadata
+        ? {
+            captureId: metadata.captureId,
+            responseRevision: metadata.revision,
+            responseObservedAt: metadata.observedAt,
+            ...(metadata.terminalReason !== undefined
+              ? { terminalReason: metadata.terminalReason }
+              : {}),
+          }
+        : {}),
       ...(TERMINAL_RESPONSE_STATUSES.has(status) ? { completedAt: timestamp } : {}),
     });
 
@@ -346,6 +422,16 @@ export async function applyResponseUpdate(
             responseStatus: status,
             responseText: responseText ?? item.responseText,
             responseMarkdown: responseMarkdown ?? item.responseMarkdown,
+            ...(metadata
+              ? {
+                  captureId: metadata.captureId,
+                  responseRevision: metadata.revision,
+                  responseObservedAt: metadata.observedAt,
+                  ...(metadata.terminalReason !== undefined
+                    ? { terminalReason: metadata.terminalReason }
+                    : {}),
+                }
+              : {}),
           }
         : item,
     );

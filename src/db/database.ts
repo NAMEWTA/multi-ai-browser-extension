@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
-import type { ProviderId } from "../core/providers/contracts";
+import type { ProviderId, ResponseTerminalReason } from "../core/providers/contracts";
 
 export type SessionSource = "local" | "imported";
 export type SessionLayoutMode = "tiles" | "adaptive";
@@ -67,6 +67,10 @@ export interface ProviderExchangeRecord {
   responseStatus: ExchangeResponseStatus;
   responseText?: string;
   responseMarkdown?: string;
+  captureId?: string;
+  responseRevision?: number;
+  responseObservedAt?: string;
+  terminalReason?: ResponseTerminalReason;
   submittedAt?: string;
   completedAt?: string;
   message?: string;

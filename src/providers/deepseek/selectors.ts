@@ -44,7 +44,51 @@ export const deepseekSelectors = {
     "[class*='search-process']",
     "[class*='search-status']",
     "[class*='tool-call']",
+    "[role='status']",
   ],
+  responseCapture: {
+    turnTiers: [
+      {
+        id: "virtual-turn",
+        confidence: "canonical",
+        selectors: ["[data-virtual-list-item-key]:has(.ds-markdown)"],
+      },
+      {
+        id: "assistant-turn",
+        confidence: "semantic",
+        selectors: [
+          ".ds-assistant-message:has(.ds-markdown)",
+          "[class*='assistant-message']:has(.ds-markdown)",
+          ".assistant-response",
+          "[data-role='assistant']",
+        ],
+      },
+      {
+        id: "content-fallback",
+        confidence: "fallback",
+        selectors: [
+          ".ds-assistant-message-main-content",
+          ".ds-markdown:not(.ds-think-content .ds-markdown)",
+        ],
+      },
+    ],
+    finalContainers: [".ds-assistant-message-main-content"],
+    contentBlocks: [".ds-markdown:not(.ds-think-content .ds-markdown)"],
+    exclude: [
+      ".ds-think-content",
+      "[class*='think-content']",
+      "[class*='reasoning']",
+      "[class*='search-plan']",
+      "[class*='search-process']",
+      "[class*='search-status']",
+      "[class*='tool-call']",
+    ],
+    statusOnly: ["[role='status']"],
+    interrupted: ["[role='status']"],
+    interruptedLabels: ["已停止", "Stopped"],
+    observeAttributes: ["aria-busy", "data-state", "data-virtual-list-item-key", "data-id"],
+    allowStableCompletionWithoutGenerating: true,
+  },
   generating: [
     "button[aria-label*='停止']",
     "button[aria-label*='Stop']",

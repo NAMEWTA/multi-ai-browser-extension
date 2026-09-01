@@ -126,7 +126,7 @@ describe("DoubaoStrategy", () => {
       );
 
       breakButton.remove();
-      await vi.advanceTimersByTimeAsync(6_002);
+      await vi.advanceTimersByTimeAsync(6_300);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
         text: expect.stringContaining("正文内容"),

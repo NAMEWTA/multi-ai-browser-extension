@@ -154,8 +154,12 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     baseline: ResponseBaseline,
     onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
   ): Promise<ResponseCaptureUpdate> {
-    if (!this.selectors.responses?.length) {
-      return { status: "unsupported", message: "当前站点尚未配置回复采集规则" };
+    if (!this.selectors.responses?.length && !this.selectors.responseCapture?.turnTiers.length) {
+      return {
+        status: "unsupported",
+        terminalReason: "unsupported",
+        message: "当前站点尚未配置回复采集规则",
+      };
     }
 
     const timeoutMs = this.selectors.responseTimeoutMs ?? ctx.responseTimeoutMs ?? 180_000;
@@ -174,14 +178,18 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     const responseSnapshots = (document: Document) => this.responseSnapshots(document);
     const responseGenerating = (document: Document, response: HTMLElement) =>
       this.isResponseGenerating(document, response);
+    const responseInterrupted = (document: Document, response: HTMLElement) =>
+      this.isResponseInterrupted(document, response);
     const findBlocked = (document: Document) => this.findBlocked(document);
+    const capturePlan = this.selectors.responseCapture;
 
     return await new Promise<ResponseCaptureUpdate>((resolve, reject) => {
       let settled = false;
       let checking = false;
       let checkAgain = false;
       let deadlineReached = false;
-      let selectedKey: string | undefined;
+      let selectedTurnKey: string | undefined;
+      let bestSnapshot: ResponseContentSnapshot | undefined;
       let latestText = "";
       let latestMarkdown = "";
       let lastReportedText = "";
@@ -191,6 +199,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       let generatingStoppedAt: number | undefined;
       let scheduledCheck: number | undefined;
       let quietTimer: number | undefined;
+      let terminalFingerprint: string | undefined;
 
       const observer = new MutationObserver(() => scheduleCheck());
       const poll = ctx.window.setInterval(() => scheduleCheck(), pollMs);
@@ -203,6 +212,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
         if (latestText) {
           finish({
             status: "partial",
+            terminalReason: "aborted",
             text: latestText,
             markdown: latestMarkdown,
             message: "回复采集已取消，已保存当前可见内容",
@@ -270,14 +280,19 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           const now = Date.now();
 
           if (selected) {
-            selectedKey = selected.key;
-            if (
-              selected.text &&
-              (selected.text !== latestText || selected.markdown !== latestMarkdown)
-            ) {
-              latestText = selected.text;
-              latestMarkdown = selected.markdown;
-              lastChangedAt = now;
+            selectedTurnKey = selected.key;
+            const accepted = shouldAcceptSnapshot(selected, bestSnapshot);
+            if (accepted) {
+              bestSnapshot = selected;
+              if (
+                selected.text &&
+                (selected.text !== latestText || selected.markdown !== latestMarkdown)
+              ) {
+                latestText = selected.text;
+                latestMarkdown = selected.markdown;
+                lastChangedAt = now;
+                terminalFingerprint = undefined;
+              }
             }
             if (
               latestText &&
@@ -292,18 +307,54 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
             if (generating) {
               generatingSeen = true;
               generatingStoppedAt = undefined;
+              terminalFingerprint = undefined;
             } else if (generatingSeen && generatingStoppedAt === undefined) {
               generatingStoppedAt = now;
             }
 
-            if (latestText && !generating) {
-              const quietSince = Math.max(lastChangedAt, generatingStoppedAt ?? 0);
-              const quietFor = now - quietSince;
-              if (quietFor >= quietMs) {
-                finish({ status: "completed", text: latestText, markdown: latestMarkdown });
+            const interrupted = responseInterrupted(ctx.document, selected.element);
+            if (latestText && !generating && interrupted) {
+              const fingerprint = `interrupted\u0000${responseFingerprint(selected)}`;
+              if (accepted && terminalFingerprint === fingerprint) {
+                finish({
+                  status: "partial",
+                  terminalReason: "interrupted",
+                  text: latestText,
+                  markdown: latestMarkdown,
+                  message: "回复已停止，已保存停止前的可见内容",
+                });
                 return;
               }
-              scheduleQuietCheck(quietMs - quietFor);
+              terminalFingerprint = accepted ? fingerprint : undefined;
+              scheduleQuietCheck(250);
+            } else {
+              const hasTerminalEvidence = generatingSeen
+                ? generatingStoppedAt !== undefined
+                : Boolean(
+                    capturePlan?.allowStableCompletionWithoutGenerating &&
+                    bestSnapshot?.hasFinalContainer,
+                  ) || !capturePlan;
+              if (latestText && !generating && hasTerminalEvidence) {
+                const quietSince = Math.max(lastChangedAt, generatingStoppedAt ?? 0);
+                const quietFor = now - quietSince;
+                if (quietFor >= quietMs) {
+                  const fingerprint = responseFingerprint(selected);
+                  if (accepted && terminalFingerprint === fingerprint) {
+                    finish({
+                      status: "completed",
+                      terminalReason: "completed",
+                      text: latestText,
+                      markdown: latestMarkdown,
+                    });
+                    return;
+                  }
+                  terminalFingerprint = accepted ? fingerprint : undefined;
+                  scheduleQuietCheck(250);
+                } else {
+                  terminalFingerprint = undefined;
+                  scheduleQuietCheck(quietMs - quietFor);
+                }
+              }
             }
           }
 
@@ -312,12 +363,14 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
               latestText
                 ? {
                     status: "partial",
+                    terminalReason: "verification",
                     text: latestText,
                     markdown: latestMarkdown,
                     message: "官网要求完成人工验证，已保存当前可见内容",
                   }
                 : {
                     status: "failed",
+                    terminalReason: "verification",
                     message: "官网要求完成人工验证，请验证后重新发送",
                   },
             );
@@ -329,12 +382,14 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
               latestText
                 ? {
                     status: "partial",
+                    terminalReason: generatingSeen ? "timeout" : "uncertain-final",
                     text: latestText,
                     markdown: latestMarkdown,
                     message: "等待回复结束超时，已保存当前可见内容",
                   }
                 : {
                     status: "timeout",
+                    terminalReason: "timeout",
                     message: "未检测到新的回复内容，请检查官网页面或更新采集规则",
                   },
             );
@@ -350,10 +405,12 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       function selectResponseSnapshot(
         snapshots: readonly ResponseContentSnapshot[],
       ): ResponseContentSnapshot | undefined {
-        if (selectedKey) {
-          const selected = snapshots.find((snapshot) => snapshot.key === selectedKey);
+        if (selectedTurnKey) {
+          const selected = bestResponseSnapshot(
+            snapshots.filter((snapshot) => snapshot.key === selectedTurnKey),
+          );
           if (selected) return selected;
-          selectedKey = undefined;
+          selectedTurnKey = undefined;
         }
         const added = snapshots.filter((snapshot) => {
           if (baselineKeys.has(snapshot.key)) {
@@ -361,7 +418,10 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           }
           return !(snapshot.key.startsWith("index:") && baselineFallbackTexts.has(snapshot.text));
         });
-        if (added.length) return added.at(-1);
+        if (added.length) {
+          const lastKey = added.at(-1)!.key;
+          return bestResponseSnapshot(added.filter((snapshot) => snapshot.key === lastKey));
+        }
         const last = snapshots.at(-1);
         if (
           last &&
@@ -392,6 +452,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           "data-chat",
           "data-chat-answers-wrap",
           "data-message-id",
+          ...new Set(capturePlan?.observeAttributes ?? []),
         ],
       });
       scheduleCheck();
@@ -460,10 +521,22 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   }
 
   protected responseSnapshots(document: Document): ResponseContentSnapshot[] {
+    const capturePlan = this.selectors.responseCapture;
     return readResponseContent(document, {
       roots: this.selectors.responses ?? [],
-      ...(this.selectors.responseContent ? { content: this.selectors.responseContent } : {}),
-      ...(this.selectors.responseExclude ? { exclude: this.selectors.responseExclude } : {}),
+      ...(capturePlan?.turnTiers ? { tiers: capturePlan.turnTiers } : {}),
+      ...(capturePlan?.finalContainers ? { finalContainers: capturePlan.finalContainers } : {}),
+      ...(capturePlan?.contentBlocks
+        ? { contentBlocks: capturePlan.contentBlocks }
+        : this.selectors.responseContent
+          ? { content: this.selectors.responseContent }
+          : {}),
+      ...(capturePlan?.exclude
+        ? { exclude: capturePlan.exclude }
+        : this.selectors.responseExclude
+          ? { exclude: this.selectors.responseExclude }
+          : {}),
+      ...(capturePlan?.statusOnly ? { statusOnly: capturePlan.statusOnly } : {}),
       getKey: (element, index) => this.responseKey(element, index),
     });
   }
@@ -484,4 +557,49 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       ? Boolean(findFirstUsable(document, this.selectors.generating))
       : false;
   }
+
+  protected isResponseInterrupted(document: Document, response: HTMLElement): boolean {
+    void document;
+    const plan = this.selectors.responseCapture;
+    if (!plan?.interrupted?.length) return false;
+    const labels = new Set(plan.interruptedLabels ?? []);
+    return [...response.querySelectorAll<HTMLElement>(plan.interrupted.join(","))].some(
+      (element) =>
+        isElementUsable(element) &&
+        (!labels.size || labels.has(normalizeComposerValue(element.textContent ?? ""))),
+    );
+  }
+}
+
+function bestResponseSnapshot(
+  snapshots: readonly ResponseContentSnapshot[],
+): ResponseContentSnapshot | undefined {
+  return snapshots.toSorted(compareResponseSnapshots).at(-1);
+}
+
+function compareResponseSnapshots(
+  left: ResponseContentSnapshot,
+  right: ResponseContentSnapshot,
+): number {
+  return left.quality - right.quality || left.text.length - right.text.length;
+}
+
+function shouldAcceptSnapshot(
+  next: ResponseContentSnapshot,
+  current: ResponseContentSnapshot | undefined,
+): boolean {
+  if (!next.text || next.statusOnly) return false;
+  if (!current || next.key !== current.key || next.quality > current.quality) return true;
+  if (next.quality < current.quality) return false;
+  return next.text.length >= current.text.length;
+}
+
+function responseFingerprint(snapshot: ResponseContentSnapshot): string {
+  return [
+    snapshot.key,
+    snapshot.candidateId,
+    snapshot.quality,
+    snapshot.text,
+    snapshot.markdown,
+  ].join("\u0000");
 }

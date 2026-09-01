@@ -15,6 +15,20 @@ export const cozeSelectors = {
   ],
   login: ["a[href*='login']", "button[class*='login' i]", "input[type='tel']"],
   responses: [".assistant-response", "[data-role='assistant']", "[class*='message-assistant']"],
+  responseCapture: {
+    turnTiers: [
+      {
+        id: "assistant-semantic",
+        confidence: "semantic",
+        selectors: ["[data-role='assistant']", "[class*='message-assistant']"],
+      },
+      { id: "assistant-fallback", confidence: "fallback", selectors: [".assistant-response"] },
+    ],
+    contentBlocks: ["[class*='markdown']", "[class*='message-content']", ".assistant-response"],
+    exclude: ["[class*='thinking']", "[class*='tool-call']", "[class*='message-action']"],
+    statusOnly: ["[role='status']"],
+    observeAttributes: ["aria-busy", "data-state", "data-message-id"],
+  },
   generating: ["button[aria-label*='停止']", "button[aria-label*='Stop']"],
   newConversation: ["button[aria-label*='新建对话']", "[role='button'][aria-label*='新建对话']"],
   newConversationLabels: ["新建对话", "新对话", "New chat"],

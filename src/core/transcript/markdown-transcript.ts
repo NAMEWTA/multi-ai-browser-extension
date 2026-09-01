@@ -180,7 +180,7 @@ function renderExchange(exchange: ProviderExchangeRecord): string {
     const metadata =
       exchange.responseStatus === "completed"
         ? ""
-        : `\n\n${renderStatusQuote(exchange, "回复采集尚未完成。")}`;
+        : `\n\n${renderStatusQuote(exchange, responseStatusSummary(exchange))}`;
     return `${heading}\n\n${response}${metadata}`;
   }
   return `${heading}\n\n${renderStatusQuote(exchange, "未采集到回复内容。")}`;
@@ -192,10 +192,34 @@ function renderStatusQuote(exchange: ProviderExchangeRecord, summary: string): s
     `发送状态：${exchange.submitStatus}`,
     `回复状态：${exchange.responseStatus}`,
   ];
+  if (exchange.terminalReason)
+    lines.push(`终止原因：${terminalReasonLabel(exchange.terminalReason)}`);
   if (exchange.message !== undefined && exchange.message.length > 0) {
     lines.push("详情：", ...exchange.message.split(/\r?\n/u));
   }
   return lines.map((line) => `> ${line}`).join("\n");
+}
+
+function responseStatusSummary(exchange: ProviderExchangeRecord): string {
+  if (exchange.terminalReason === "interrupted") return "回复已停止，已保留停止前的内容。";
+  if (exchange.terminalReason === "uncertain-final") return "回复正文已保留，但终态未确认。";
+  return "回复采集尚未完成。";
+}
+
+function terminalReasonLabel(
+  reason: NonNullable<ProviderExchangeRecord["terminalReason"]>,
+): string {
+  return {
+    completed: "已完成",
+    interrupted: "用户停止",
+    aborted: "采集取消",
+    timeout: "采集超时",
+    navigation: "页面导航",
+    verification: "人工验证",
+    "uncertain-final": "终态未确认",
+    failed: "采集失败",
+    unsupported: "不支持采集",
+  }[reason];
 }
 
 function sortedTurns(detail: SessionDetail): TranscriptTurn[] {

@@ -9,7 +9,11 @@ describe("provider response Markdown protocol", () => {
       providerId: "qwen",
       sessionId: "session-1",
       turnId: "turn-1",
+      captureId: "capture-1",
+      revision: 3,
+      observedAt: "2026-09-01T08:00:00.000Z",
       status: "completed",
+      terminalReason: "completed",
       text: "Title",
       markdown: "# Title",
     });

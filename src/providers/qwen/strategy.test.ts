@@ -184,7 +184,7 @@ describe("QwenStrategy", () => {
       await Promise.resolve();
       expect(completed).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(2);
+      await vi.advanceTimersByTimeAsync(1_000);
       await expect(capture).resolves.toMatchObject({
         status: "completed",
         text: expect.stringContaining("结构化回答"),

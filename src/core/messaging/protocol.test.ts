@@ -5,6 +5,7 @@ import {
   providerCommandSchema,
   providerUrlUpdateSchema,
   providerDiagnosticSchema,
+  providerResponseUpdateSchema,
   runtimeMessageSchema,
   workspaceSubmitSchema,
 } from "./protocol";
@@ -94,6 +95,28 @@ describe("runtime message validation", () => {
     ).toBe(false);
   });
 
+  it("requires monotonic capture metadata on response updates", () => {
+    const update = {
+      type: "PROVIDER_RESPONSE_UPDATE",
+      panelId: "panel-1",
+      providerId: "deepseek",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      captureId: "capture-1",
+      revision: 8,
+      observedAt: "2026-09-01T08:00:08.000Z",
+      status: "completed",
+      terminalReason: "completed",
+      text: "完整回答",
+      markdown: "## 完整回答",
+    };
+    expect(providerResponseUpdateSchema.safeParse(update).success).toBe(true);
+    expect(providerResponseUpdateSchema.safeParse({ ...update, revision: 0 }).success).toBe(false);
+    expect(
+      providerResponseUpdateSchema.safeParse({ ...update, captureId: undefined }).success,
+    ).toBe(false);
+  });
+
   it("allows only bounded diagnostic metadata", () => {
     expect(
       providerDiagnosticSchema.safeParse({
@@ -140,6 +163,19 @@ describe("runtime message validation", () => {
             eligible: true,
           },
         ],
+      }).success,
+    ).toBe(true);
+    expect(
+      providerDiagnosticSchema.safeParse({
+        type: "PROVIDER_DIAGNOSTIC",
+        panelId: "panel-1",
+        providerId: "deepseek",
+        stage: "response-update",
+        operation: "response",
+        responseRevision: 8,
+        responseStatus: "completed",
+        responseLength: 1_024,
+        terminalReason: "completed",
       }).success,
     ).toBe(true);
     expect(

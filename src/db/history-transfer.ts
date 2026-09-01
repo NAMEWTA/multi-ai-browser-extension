@@ -105,6 +105,22 @@ const exchangeSchema = z
     ]),
     responseText: z.string().max(2_000_000).optional(),
     responseMarkdown: z.string().max(2_000_000).optional(),
+    captureId: z.string().min(1).max(100).optional(),
+    responseRevision: z.number().int().positive().optional(),
+    responseObservedAt: z.iso.datetime().optional(),
+    terminalReason: z
+      .enum([
+        "completed",
+        "interrupted",
+        "aborted",
+        "timeout",
+        "navigation",
+        "verification",
+        "uncertain-final",
+        "failed",
+        "unsupported",
+      ])
+      .optional(),
     submittedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
     message: z.string().max(2_000).optional(),
@@ -264,6 +280,14 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
     ...(exchange.responseMarkdown !== undefined
       ? { responseMarkdown: exchange.responseMarkdown }
       : {}),
+    ...(exchange.captureId !== undefined ? { captureId: exchange.captureId } : {}),
+    ...(exchange.responseRevision !== undefined
+      ? { responseRevision: exchange.responseRevision }
+      : {}),
+    ...(exchange.responseObservedAt !== undefined
+      ? { responseObservedAt: exchange.responseObservedAt }
+      : {}),
+    ...(exchange.terminalReason !== undefined ? { terminalReason: exchange.terminalReason } : {}),
     ...(exchange.submittedAt !== undefined ? { submittedAt: exchange.submittedAt } : {}),
     ...(exchange.completedAt !== undefined ? { completedAt: exchange.completedAt } : {}),
     ...(exchange.message !== undefined ? { message: exchange.message } : {}),

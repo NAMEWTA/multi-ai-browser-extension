@@ -13,6 +13,25 @@ export const chatgptSelectors = {
   ],
   login: ["button[data-testid='login-button']", "a[href*='auth/login']"],
   responses: [".assistant-response", "[data-message-author-role='assistant']"],
+  responseCapture: {
+    turnTiers: [
+      {
+        id: "assistant-message",
+        confidence: "canonical",
+        selectors: ["[data-message-author-role='assistant']"],
+      },
+      { id: "assistant-fallback", confidence: "fallback", selectors: [".assistant-response"] },
+    ],
+    contentBlocks: [
+      ".markdown",
+      "[class*='markdown']",
+      "[data-message-author-role='assistant']",
+      ".assistant-response",
+    ],
+    exclude: ["[data-testid*='action']", "[class*='message-actions']"],
+    statusOnly: ["[role='status']"],
+    observeAttributes: ["aria-busy", "data-state", "data-message-id"],
+  },
   generating: ["button[data-testid='stop-button']", "button[aria-label*='Stop generating']"],
   newConversation: ["a[data-testid='create-new-chat-button']", "a[href='/']"],
   newConversationLabels: ["New chat", "新聊天", "新对话"],

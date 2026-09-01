@@ -34,9 +34,28 @@ export interface ProviderSelectors {
   readonly responseTimeoutMs?: number;
   readonly responseQuietMs?: number;
   readonly responsePollMs?: number;
+  readonly responseCapture?: ResponseCapturePlan;
   readonly generating?: readonly string[];
   readonly newConversation?: readonly string[];
   readonly newConversationLabels?: readonly string[];
+}
+
+export interface ResponseSelectorTier {
+  readonly id: string;
+  readonly selectors: readonly string[];
+  readonly confidence: "canonical" | "semantic" | "fallback";
+}
+
+export interface ResponseCapturePlan {
+  readonly turnTiers: readonly ResponseSelectorTier[];
+  readonly finalContainers?: readonly string[];
+  readonly contentBlocks?: readonly string[];
+  readonly exclude?: readonly string[];
+  readonly statusOnly?: readonly string[];
+  readonly interrupted?: readonly string[];
+  readonly interruptedLabels?: readonly string[];
+  readonly observeAttributes?: readonly string[];
+  readonly allowStableCompletionWithoutGenerating?: boolean;
 }
 
 export interface FrameContext {
@@ -74,11 +93,23 @@ export interface ResponseBaselineEntry {
 export type ResponseCaptureStatus =
   "waiting" | "streaming" | "completed" | "partial" | "timeout" | "failed" | "unsupported";
 
+export type ResponseTerminalReason =
+  | "completed"
+  | "interrupted"
+  | "aborted"
+  | "timeout"
+  | "navigation"
+  | "verification"
+  | "uncertain-final"
+  | "failed"
+  | "unsupported";
+
 export interface ResponseCaptureUpdate {
   readonly status: ResponseCaptureStatus;
   readonly text?: string;
   readonly markdown?: string;
   readonly message?: string;
+  readonly terminalReason?: ResponseTerminalReason;
 }
 
 export interface ComposerCandidateDiagnostic {

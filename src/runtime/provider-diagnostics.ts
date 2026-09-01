@@ -1,5 +1,10 @@
 import { browser } from "wxt/browser";
-import type { ComposerCandidateDiagnostic, ProviderId } from "../core/providers/contracts";
+import type {
+  ComposerCandidateDiagnostic,
+  ProviderId,
+  ResponseCaptureStatus,
+  ResponseTerminalReason,
+} from "../core/providers/contracts";
 
 export type DiagnosticStage =
   | "frame-ready"
@@ -23,6 +28,10 @@ interface DiagnosticRecord {
   readonly composerCandidates?: readonly ComposerCandidateDiagnostic[];
   readonly submit?: string;
   readonly errorCode?: string;
+  readonly responseRevision?: number;
+  readonly responseStatus?: ResponseCaptureStatus;
+  readonly responseLength?: number;
+  readonly terminalReason?: ResponseTerminalReason;
 }
 
 export async function appendProviderDiagnostic(
