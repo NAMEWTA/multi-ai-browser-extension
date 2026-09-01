@@ -11,7 +11,7 @@
 - [x] 完成八个 Provider 适配和测试。
 - [x] 完成默认 Provider 和迁移。
 - [x] 通过静态检查、覆盖率、构建与 E2E。
-- [ ] 发布稳定版 `v0.0.2`。
+- [x] 发布稳定版 `v0.0.2`。
 
 ## 自动化证据
 
@@ -26,7 +26,9 @@
 - Tag：`v0.0.2`。
 - Release：<https://github.com/NAMEWTA/multi-ai-browser-extension/releases/tag/v0.0.2>。
 - 产物：`multi-ai-workspace-0.0.2-chrome.zip`、`install-latest.ps1`、`multi-ai-workspace-0.0.2-SHA256SUMS.txt`。
-- Commit：由 `git rev-list -n 1 v0.0.2` 解析发布提交。
+- 发布 Commit：`0f60ee7d7f9eb950f34394c75ac96bd51c44f71a`。
+- GitHub Actions：<https://github.com/NAMEWTA/multi-ai-browser-extension/actions/runs/33508543915>，三个 job 全部通过。
+- Chrome ZIP SHA256：`0f88d4492a1dfae7f61422d7d44f5336de55231a516b2f7757fad7e7fe93883e`。
 
 ## 剩余验证边界
 
