@@ -330,11 +330,10 @@ test("aborts all sends when one provider fails strict preflight", async () => {
   const panels = workspace.locator("article.provider-panel");
   const before = await getSubmitCounts(workspace);
   await workspace.getByLabel("查看对话记录").first().click();
-  const turnsBefore = await workspace
-    .getByRole("dialog", { name: "会话历史详情" })
-    .locator(".unified-turn-record")
-    .count();
-  await workspace.getByRole("dialog", { name: "会话历史详情" }).getByTitle("关闭").click();
+  const historyDetail = workspace.getByRole("dialog", { name: "会话历史详情" });
+  await expect(historyDetail).toBeVisible();
+  const turnsBefore = await historyDetail.locator(".unified-turn-record").count();
+  await historyDetail.getByTitle("关闭").click();
   const broken = workspace.locator("article.provider-panel[data-provider='qwen']");
   const brokenFrame = broken.locator("iframe").contentFrame();
   await brokenFrame.locator("button, [role='button']").evaluateAll((elements) => {
@@ -362,10 +361,9 @@ test("aborts all sends when one provider fails strict preflight", async () => {
     ).toBe(true);
   }
   await workspace.getByLabel("查看对话记录").first().click();
-  await expect(
-    workspace.getByRole("dialog", { name: "会话历史详情" }).locator(".unified-turn-record"),
-  ).toHaveCount(turnsBefore);
-  await workspace.getByRole("dialog", { name: "会话历史详情" }).getByTitle("关闭").click();
+  await expect(historyDetail).toBeVisible();
+  await expect(historyDetail.locator(".unified-turn-record")).toHaveCount(turnsBefore);
+  await historyDetail.getByTitle("关闭").click();
   await broken.getByTitle("刷新网页").click();
   await expect(broken.locator(".panel-status.status-ready")).toBeVisible({ timeout: 12_000 });
 });
