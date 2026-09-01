@@ -70,4 +70,74 @@ describe("DeepSeekStrategy", () => {
 
     await expect(strategy.submit(ctx)).resolves.toBeUndefined();
   });
+
+  it("tracks a whole virtualized turn and captures only its final answer", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `
+          <article data-virtual-list-item-key="old-turn">
+            <div class="ds-assistant-message-main-content">
+              <div class="ds-markdown">旧回复</div>
+            </div>
+          </article>
+        `,
+      );
+      const strategy = new DeepSeekStrategy();
+      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 30_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      expect(baseline).toMatchObject({
+        keys: ["deepseek-turn:old-turn"],
+        lastKey: "deepseek-turn:old-turn",
+        lastText: "旧回复",
+      });
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const control = document.querySelector<HTMLElement>("div[role='button']")!;
+      control.classList.remove("ds-button--disabled");
+
+      const thinkingTurn = document.createElement("article");
+      thinkingTurn.dataset.virtualListItemKey = "current-turn";
+      thinkingTurn.innerHTML = `
+        <div class="ds-think-content">
+          <div class="ds-markdown">搜索计划：先查询资料</div>
+        </div>
+      `;
+      document.body.append(thinkingTurn);
+      await vi.advanceTimersByTimeAsync(13_000);
+      expect(updates).not.toHaveBeenCalled();
+
+      const finalTurn = document.createElement("article");
+      finalTurn.dataset.virtualListItemKey = "current-turn";
+      finalTurn.innerHTML = `
+        <div class="ds-think-content">
+          <div class="ds-markdown">搜索计划：先查询资料</div>
+        </div>
+        <div class="ds-assistant-message-main-content">
+          <div class="ds-markdown"><h2>最终回答</h2><p>这是正文。</p></div>
+        </div>
+      `;
+      thinkingTurn.replaceWith(finalTurn);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(updates).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "streaming",
+          text: expect.stringContaining("最终回答"),
+          markdown: expect.stringContaining("## 最终回答"),
+        }),
+      );
+
+      control.classList.add("ds-button--disabled");
+      await vi.advanceTimersByTimeAsync(12_002);
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        text: expect.stringContaining("最终回答"),
+        markdown: expect.not.stringContaining("搜索计划"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

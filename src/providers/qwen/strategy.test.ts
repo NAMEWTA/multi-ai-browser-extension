@@ -84,12 +84,39 @@ describe("QwenStrategy", () => {
   it("recognizes a visible verification challenge without trying to bypass it", async () => {
     document.body.innerHTML = `
       <textarea class="message-input-textarea"></textarea>
-      <div class="nc-container">请完成验证</div>
+      <div class="nc-container">
+        <div class="nc_wrapper"><div class="nc_scale" role="slider">请拖动滑块完成验证</div></div>
+      </div>
     `;
 
     await expect(
       new QwenStrategy().probe({ document, window, timeoutMs: 100 }),
     ).resolves.toMatchObject({ status: "blocked" });
+  });
+
+  it("ignores dormant verification SDK containers on a normal chat page", async () => {
+    document.body.innerHTML = `
+      <textarea class="message-input-textarea"></textarea>
+      <div class="nc-container"></div>
+      <div id="baxia-dialog-content"></div>
+    `;
+
+    await expect(
+      new QwenStrategy().probe({ document, window, timeoutMs: 100 }),
+    ).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("ignores a zero-sized verification control placeholder", async () => {
+    document.body.innerHTML = `
+      <textarea class="message-input-textarea"></textarea>
+      <div class="nc-container" style="width: 0; height: 0">
+        <div class="nc_scale" role="slider">请拖动滑块完成验证</div>
+      </div>
+    `;
+
+    await expect(
+      new QwenStrategy().probe({ document, window, timeoutMs: 100 }),
+    ).resolves.toMatchObject({ status: "ready" });
   });
 
   it("recognizes the current stop control as an in-progress response", async () => {

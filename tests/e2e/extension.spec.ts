@@ -70,6 +70,32 @@ test("opens a full-page workspace with DeepSeek and Kimi by default", async () =
   await expect(workspace.locator(".panel-status.status-ready")).toHaveCount(2, { timeout: 30_000 });
 });
 
+test("keeps the empty prompt selector above provider panel actions", async () => {
+  await workspace.locator(".prompt-summary").click();
+  const selector = workspace.getByRole("dialog", { name: "选择提示词" });
+  await expect(selector).toBeVisible();
+  await expect(selector).toContainText("还没有维护提示词");
+  await expect(selector.getByRole("button", { name: "全选" })).toHaveCount(0);
+  await expect(selector.getByRole("button", { name: "清空" })).toHaveCount(0);
+  await expect(selector.getByRole("button", { name: "预览" })).toHaveCount(0);
+
+  const copyButton = workspace.getByLabel("复制 DeepSeek 会话");
+  const copyBox = await copyButton.boundingBox();
+  expect(copyBox).not.toBeNull();
+  const popoverOwnsHitPoint = await workspace.evaluate(
+    ({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest(".prompt-popover")),
+    { x: copyBox!.x + copyBox!.width / 2, y: copyBox!.y + copyBox!.height / 2 },
+  );
+  expect(popoverOwnsHitPoint).toBe(true);
+  await workspace.screenshot({
+    path: "test-results/prompt-empty-overlay-1440x900.png",
+    fullPage: true,
+  });
+
+  await workspace.locator(".prompt-summary").click();
+  await expect(selector).toBeHidden();
+});
+
 test("keeps drafts isolated from native website composers until submit", async () => {
   const prompt = "你是什么模型？我是通过统一输入框输入的";
   await workspace.locator(".global-composer textarea").fill(prompt);
@@ -130,6 +156,7 @@ test("submits exactly once and stores provider replies in the session timeline",
         summaries.map((summary) => summary.getAttribute("aria-expanded")),
       ),
   ).toEqual(["false", "false"]);
+  await detail.screenshot({ path: "test-results/unified-history-anchor-1440x900.png" });
   await exchanges.first().locator(".unified-exchange-summary").click();
   await expect(exchanges.first().locator(".unified-exchange-content")).toContainText(
     `Mock AI 回复：${prompt}`,
@@ -157,6 +184,7 @@ test("moves unified question navigation above the timeline on narrow screens", a
   expect(await workspace.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     await workspace.evaluate(() => document.documentElement.clientWidth),
   );
+  await detail.screenshot({ path: "test-results/unified-history-mobile-700x800.png" });
   await detail.getByTitle("关闭").click();
   await workspace.setViewportSize({ width: 1440, height: 900 });
 });
@@ -168,6 +196,18 @@ test("keeps multiple turns and restores exact official URLs when switching tasks
   await workspace.getByLabel("查看对话记录").first().click();
   const detail = workspace.getByRole("dialog", { name: "会话历史详情" });
   await expect(detail.locator(".unified-turn-record")).toHaveCount(2);
+  await expect(detail.locator(".unified-question-navigation-title")).toContainText("2 / 2");
+  await expect(
+    detail.locator('.unified-question-navigation button[aria-current="location"]'),
+  ).toContainText("同一会话的第二个问题");
+  expect(
+    await detail
+      .locator(".unified-exchange-summary")
+      .evaluateAll((summaries) =>
+        summaries.map((summary) => summary.getAttribute("aria-expanded")),
+      ),
+  ).toEqual(["false", "false", "false", "false"]);
+  await detail.screenshot({ path: "test-results/unified-history-anchor-two-turns-1440x900.png" });
   await detail.getByTitle("关闭").click();
 
   await expect

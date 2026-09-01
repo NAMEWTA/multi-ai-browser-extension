@@ -1,6 +1,7 @@
 import { BaseDomStrategy } from "../../core/providers/base-dom-strategy";
 import type { FrameContext, PromptPayload } from "../../core/providers/contracts";
 import {
+  isElementVisible,
   normalizeComposerValue,
   readComposerValue,
   waitForCondition,
@@ -60,5 +61,32 @@ export class KimiStrategy extends BaseDomStrategy {
       });
     }
     this.activeComposer = composer;
+  }
+
+  protected override responseKey(element: HTMLElement, index: number): string | undefined {
+    const turn = element.closest<HTMLElement>(
+      "[data-message-id], [data-msg-id], [data-id], [data-index], [data-key]",
+    );
+    if (turn) {
+      for (const attribute of [
+        "data-message-id",
+        "data-msg-id",
+        "data-id",
+        "data-index",
+        "data-key",
+      ]) {
+        const value = turn.getAttribute(attribute)?.trim();
+        if (value) return `kimi-turn:${value}`;
+      }
+    }
+    return super.responseKey(element, index);
+  }
+
+  protected override isResponseGenerating(document: Document, response: HTMLElement): boolean {
+    const scopedSignals = response.querySelectorAll(
+      "[aria-busy='true'], [data-state='loading'], [class*='loading'], [class*='typing']",
+    );
+    if ([...scopedSignals].some((element) => isElementVisible(element))) return true;
+    return super.isResponseGenerating(document, response);
   }
 }

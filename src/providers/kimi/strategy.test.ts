@@ -110,4 +110,74 @@ describe("KimiStrategy", () => {
       new KimiStrategy().writePrompt({ document, window, timeoutMs: 100 }, { text: "失败" }),
     ).rejects.toMatchObject({ code: "COMPOSER_NOT_READY" });
   });
+
+  it("keeps the current assistant turn across reverse ordering and a virtualized remount", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = document.createElement("section");
+      list.className = "chat-content-list";
+      list.innerHTML = `
+        <article class="chat-content-item-assistant" data-message-id="old-message">
+          <div class="segment-content"><div class="markdown">你好，我是 Kimi</div></div>
+        </article>
+      `;
+      document.body.append(list);
+      const strategy = new KimiStrategy();
+      const ctx = { document, window, timeoutMs: 100, responseTimeoutMs: 30_000 };
+      const baseline = await strategy.prepareSubmit(ctx);
+      expect(baseline).toMatchObject({
+        keys: ["kimi-turn:old-message"],
+        lastKey: "kimi-turn:old-message",
+        lastText: "你好，我是 Kimi",
+      });
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(ctx, baseline, updates);
+      const submit = document.querySelector<HTMLElement>(".send-button-container")!;
+      submit.classList.remove("disabled");
+      submit.classList.add("stop");
+      submit.removeAttribute("aria-disabled");
+
+      const searchingTurn = document.createElement("article");
+      searchingTurn.className = "chat-content-item-assistant";
+      searchingTurn.dataset.messageId = "current-message";
+      searchingTurn.innerHTML = `
+        <div class="segment-content search-process" data-state="loading">
+          <div class="markdown">正在获取网页</div>
+        </div>
+      `;
+      list.prepend(searchingTurn);
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(updates).not.toHaveBeenCalled();
+
+      const finalTurn = document.createElement("article");
+      finalTurn.className = "chat-content-item-assistant";
+      finalTurn.dataset.messageId = "current-message";
+      finalTurn.innerHTML = `
+        <div class="segment-content search-status">已获取 5 个网页</div>
+        <div class="segment-content"><div class="markdown"><h2>当前回答</h2><p>正文</p></div></div>
+      `;
+      searchingTurn.replaceWith(finalTurn);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(updates).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "streaming",
+          text: expect.stringContaining("当前回答"),
+          markdown: expect.stringContaining("## 当前回答"),
+        }),
+      );
+
+      submit.classList.remove("stop");
+      submit.classList.add("disabled");
+      submit.setAttribute("aria-disabled", "true");
+      await vi.advanceTimersByTimeAsync(8_002);
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        text: expect.stringContaining("当前回答"),
+        markdown: expect.not.stringContaining("你好，我是 Kimi"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

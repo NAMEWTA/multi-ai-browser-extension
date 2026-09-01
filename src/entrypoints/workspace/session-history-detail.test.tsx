@@ -1,18 +1,28 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExchangeRecord, SessionRecord, TurnRecord } from "../../db/database";
 import type { SessionDetail } from "../../db/session-service";
 import { SessionHistoryDetail } from "./session-history-detail";
 
 const scrollTo = vi.fn();
+const scrollIntoView = vi.fn();
 
 Object.defineProperty(HTMLElement.prototype, "scrollTo", {
   configurable: true,
   value: scrollTo,
 });
 
+Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: scrollIntoView,
+});
+
 describe("SessionHistoryDetail", () => {
-  beforeEach(() => scrollTo.mockClear());
+  beforeEach(() => {
+    scrollTo.mockClear();
+    scrollIntoView.mockClear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("starts at the latest turn and keeps every AI answer collapsed", () => {
     render(<SessionHistoryDetail detail={createDetail()} onClose={vi.fn()} onTransfer={vi.fn()} />);
@@ -24,6 +34,8 @@ describe("SessionHistoryDetail", () => {
     expect(screen.getAllByRole("button", { name: /展开 .* 的回答/ })).toHaveLength(3);
     expect(screen.queryByRole("heading", { name: "Latest answer" })).not.toBeInTheDocument();
     expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: "auto" }));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    expect(document.querySelector(".unified-question-navigation-title")).toHaveTextContent("2 / 2");
 
     fireEvent.click(screen.getByRole("button", { name: "第 1 轮：First question" }));
     expect(screen.getByRole("button", { name: "第 1 轮：First question" })).toHaveAttribute(
@@ -31,6 +43,49 @@ describe("SessionHistoryDetail", () => {
       "location",
     );
     expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "smooth" }));
+  });
+
+  it("tracks the visible turn with IntersectionObserver", () => {
+    let observerCallback: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          observerCallback = callback;
+        }
+
+        observe() {}
+        disconnect() {}
+      },
+    );
+    render(<SessionHistoryDetail detail={createDetail()} onClose={vi.fn()} onTransfer={vi.fn()} />);
+
+    const firstTurn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    act(() => {
+      observerCallback?.(
+        [{ isIntersecting: true, target: firstTurn } as unknown as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+    });
+
+    expect(screen.getByRole("button", { name: "第 1 轮：First question" })).toHaveAttribute(
+      "aria-current",
+      "location",
+    );
+  });
+
+  it("moves between turns with the compact navigation controls", () => {
+    render(<SessionHistoryDetail detail={createDetail()} onClose={vi.fn()} onTransfer={vi.fn()} />);
+
+    const previous = screen.getByRole("button", { name: "上一轮问题", hidden: true });
+    const next = screen.getByRole("button", { name: "下一轮问题", hidden: true });
+    expect(previous).toBeEnabled();
+    expect(next).toBeDisabled();
+
+    fireEvent.click(previous);
+    expect(previous).toBeDisabled();
+    expect(next).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: /展开 .* 的回答/ })).toHaveLength(3);
   });
 
   it("renders sanitized GFM only after opening an answer and never mounts images", () => {
@@ -41,7 +96,7 @@ describe("SessionHistoryDetail", () => {
 
     expect(latestAnswer).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("heading", { name: "Latest answer" })).toBeVisible();
-    expect(screen.getByRole("listitem")).toHaveTextContent("one");
+    expect(screen.getByText("one")).toBeVisible();
     expect(screen.getByRole("cell", { name: "value" })).toBeVisible();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.queryByText("unsafe content")).not.toBeInTheDocument();

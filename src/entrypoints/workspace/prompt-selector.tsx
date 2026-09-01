@@ -76,14 +76,16 @@ export function PromptSelector({ question }: { question: string }) {
                 <strong>本次提示词</strong>
                 <span>按维护顺序拼接后发送</span>
               </div>
-              <div className="prompt-bulk-actions">
-                <button type="button" onClick={() => setAllTemplatesSelected(true)}>
-                  全选
-                </button>
-                <button type="button" onClick={() => setAllTemplatesSelected(false)}>
-                  清空
-                </button>
-              </div>
+              {templates.length > 0 && (
+                <div className="prompt-bulk-actions">
+                  <button type="button" onClick={() => setAllTemplatesSelected(true)}>
+                    全选
+                  </button>
+                  <button type="button" onClick={() => setAllTemplatesSelected(false)}>
+                    清空
+                  </button>
+                </div>
+              )}
             </header>
             {templates.length > 4 && (
               <label className="prompt-search">
@@ -115,17 +117,19 @@ export function PromptSelector({ question }: { question: string }) {
               )}
             </div>
             <footer>
-              <button
-                type="button"
-                disabled={!selected.length}
-                onClick={() => {
-                  setOpen(false);
-                  setPreviewOpen(true);
-                }}
-              >
-                <Eye size={14} />
-                预览
-              </button>
+              {templates.length > 0 && (
+                <button
+                  type="button"
+                  disabled={!selected.length}
+                  onClick={() => {
+                    setOpen(false);
+                    setPreviewOpen(true);
+                  }}
+                >
+                  <Eye size={14} />
+                  预览
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {

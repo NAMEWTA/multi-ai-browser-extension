@@ -451,7 +451,7 @@ textarea:focus-visible {
 
 .composer-band {
   position: relative;
-  z-index: 5;
+  z-index: 7;
   display: grid;
   justify-items: center;
   gap: 5px;

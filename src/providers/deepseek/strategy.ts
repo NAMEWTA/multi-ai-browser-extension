@@ -1,6 +1,11 @@
 import { BaseDomStrategy } from "../../core/providers/base-dom-strategy";
 import type { FrameContext, ResponseBaseline } from "../../core/providers/contracts";
-import { findFirstUsable, readComposerValue, waitForElement } from "../../core/providers/dom";
+import {
+  findFirstUsable,
+  isElementVisible,
+  readComposerValue,
+  waitForElement,
+} from "../../core/providers/dom";
 import { ProviderError } from "../../core/providers/errors";
 import { deepseekDefinition } from "./definition";
 import { deepseekSelectors } from "./selectors";
@@ -44,6 +49,29 @@ export class DeepSeekStrategy extends BaseDomStrategy {
       throw new ProviderError("PROVIDER_BUSY", "DeepSeek 当前回答仍在生成，请稍后再发送");
     }
     this.busyControlSignature = undefined;
+  }
+
+  protected override responseKey(element: HTMLElement, index: number): string | undefined {
+    const virtualItem = element.closest<HTMLElement>("[data-virtual-list-item-key]");
+    const virtualKey = virtualItem?.getAttribute("data-virtual-list-item-key")?.trim();
+    if (virtualKey) return `deepseek-turn:${virtualKey}`;
+
+    const message = element.closest<HTMLElement>("[data-message-id], [data-id]");
+    const messageId =
+      message?.getAttribute("data-message-id")?.trim() ?? message?.getAttribute("data-id")?.trim();
+    return messageId ? `deepseek-message:${messageId}` : super.responseKey(element, index);
+  }
+
+  protected override isResponseGenerating(document: Document, response: HTMLElement): boolean {
+    const scopedSignals = response.querySelectorAll(
+      "[aria-busy='true'], [data-state='loading'], [class*='loading'], [class*='typing']",
+    );
+    if ([...scopedSignals].some((element) => isElementVisible(element))) return true;
+    const sharedControl = document.querySelector<HTMLElement>(
+      "div[role='button'].ds-button--primary.ds-button--circle:not(.ds-button--disabled):not([aria-disabled='true'])",
+    );
+    if (sharedControl && isElementVisible(sharedControl)) return true;
+    return super.isResponseGenerating(document, response);
   }
 }
 

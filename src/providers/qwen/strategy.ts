@@ -48,6 +48,56 @@ export class QwenStrategy extends BaseDomStrategy {
     if (receiving && isElementVisible(receiving)) return true;
     return super.isResponseGenerating(document, response);
   }
+
+  protected override findBlocked(document: Document): HTMLElement | undefined {
+    for (const selector of qwenSelectors.blocked) {
+      for (const candidate of document.querySelectorAll(selector)) {
+        if (
+          candidate instanceof HTMLElement &&
+          isActiveVerification(candidate) &&
+          isElementVisible(candidate)
+        ) {
+          return candidate;
+        }
+      }
+    }
+    return undefined;
+  }
+}
+
+function isActiveVerification(element: HTMLElement): boolean {
+  let current: HTMLElement | null = element;
+  while (current) {
+    const style = current.ownerDocument.defaultView?.getComputedStyle(current);
+    if (
+      current.hidden ||
+      current.getAttribute("aria-hidden") === "true" ||
+      style?.display === "none" ||
+      style?.visibility === "hidden" ||
+      style?.opacity === "0" ||
+      style?.pointerEvents === "none" ||
+      (current !== current.ownerDocument.body &&
+        current !== current.ownerDocument.documentElement &&
+        (style?.width === "0px" || style?.height === "0px"))
+    ) {
+      return false;
+    }
+    current = current.parentElement;
+  }
+
+  if (element instanceof HTMLIFrameElement) return true;
+  const interactive = element.querySelector(
+    "iframe[src*='captcha' i], iframe[src*='verify' i], [role='slider'], .nc_scale, input, button",
+  );
+  if (!interactive) return false;
+  const text = normalizeComposerValue(element.innerText ?? element.textContent ?? "");
+  return (
+    /验证|验证码|滑块|安全检查|异常访问|captcha|verification|verify/i.test(text) ||
+    element.getAttribute("aria-modal") === "true" ||
+    element.getAttribute("data-state") === "open" ||
+    element.classList.contains("active") ||
+    element.classList.contains("show")
+  );
 }
 
 interface EvaluatedCandidate {

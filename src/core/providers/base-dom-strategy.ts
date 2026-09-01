@@ -35,7 +35,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   ) {}
 
   async probe(ctx: FrameContext): Promise<ProbeResult> {
-    if (this.selectors.blocked && findFirstUsable(ctx.document, this.selectors.blocked)) {
+    if (this.findBlocked(ctx.document)) {
       return { status: "blocked", detail: "官网要求完成人工验证，请验证后重试" };
     }
     if (this.findComposer(ctx.document)) return { status: "ready" };
@@ -163,10 +163,18 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     const pollMs = this.selectors.responsePollMs ?? 1_000;
     const startedAt = Date.now();
     const baselineKeys = new Set(baseline.keys ?? []);
-    const blockedSelectors = this.selectors.blocked;
+    const baselineEntries = new Map(
+      (baseline.entries ?? []).map(({ key, text }) => [key, text] as const),
+    );
+    const baselineFallbackTexts = new Set(
+      (baseline.entries ?? [])
+        .filter(({ key, text }) => key.startsWith("index:") && Boolean(text))
+        .map(({ text }) => text),
+    );
     const responseSnapshots = (document: Document) => this.responseSnapshots(document);
     const responseGenerating = (document: Document, response: HTMLElement) =>
       this.isResponseGenerating(document, response);
+    const findBlocked = (document: Document) => this.findBlocked(document);
 
     return await new Promise<ResponseCaptureUpdate>((resolve, reject) => {
       let settled = false;
@@ -257,23 +265,6 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
         checking = true;
         checkAgain = false;
         try {
-          if (blockedSelectors && findFirstUsable(ctx.document, blockedSelectors)) {
-            finish(
-              latestText
-                ? {
-                    status: "partial",
-                    text: latestText,
-                    markdown: latestMarkdown,
-                    message: "官网要求完成人工验证，已保存当前可见内容",
-                  }
-                : {
-                    status: "failed",
-                    message: "官网要求完成人工验证，请验证后重新发送",
-                  },
-            );
-            return;
-          }
-
           const snapshots = responseSnapshots(ctx.document);
           const selected = selectResponseSnapshot(snapshots);
           const now = Date.now();
@@ -316,6 +307,23 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
             }
           }
 
+          if (findBlocked(ctx.document)) {
+            finish(
+              latestText
+                ? {
+                    status: "partial",
+                    text: latestText,
+                    markdown: latestMarkdown,
+                    message: "官网要求完成人工验证，已保存当前可见内容",
+                  }
+                : {
+                    status: "failed",
+                    message: "官网要求完成人工验证，请验证后重新发送",
+                  },
+            );
+            return;
+          }
+
           if (deadlineReached || now - startedAt >= timeoutMs) {
             finish(
               latestText
@@ -343,9 +351,16 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
         snapshots: readonly ResponseContentSnapshot[],
       ): ResponseContentSnapshot | undefined {
         if (selectedKey) {
-          return snapshots.find((snapshot) => snapshot.key === selectedKey);
+          const selected = snapshots.find((snapshot) => snapshot.key === selectedKey);
+          if (selected) return selected;
+          selectedKey = undefined;
         }
-        const added = snapshots.filter((snapshot) => !baselineKeys.has(snapshot.key));
+        const added = snapshots.filter((snapshot) => {
+          if (baselineKeys.has(snapshot.key)) {
+            return baselineEntries.get(snapshot.key) !== snapshot.text;
+          }
+          return !(snapshot.key.startsWith("index:") && baselineFallbackTexts.has(snapshot.text));
+        });
         if (added.length) return added.at(-1);
         const last = snapshots.at(-1);
         if (
@@ -440,6 +455,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       lastText: last?.text ?? "",
       ...(responses.length ? { keys: responses.map((response) => response.key) } : {}),
       ...(last ? { lastKey: last.key } : {}),
+      ...(responses.length ? { entries: responses.map(({ key, text }) => ({ key, text })) } : {}),
     };
   }
 
@@ -456,6 +472,10 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     void element;
     void index;
     return undefined;
+  }
+
+  protected findBlocked(document: Document): HTMLElement | undefined {
+    return this.selectors.blocked ? findFirstUsable(document, this.selectors.blocked) : undefined;
   }
 
   protected isResponseGenerating(document: Document, response: HTMLElement): boolean {

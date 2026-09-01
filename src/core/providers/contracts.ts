@@ -62,6 +62,12 @@ export interface ResponseBaseline {
   readonly lastText: string;
   readonly keys?: readonly string[];
   readonly lastKey?: string;
+  readonly entries?: readonly ResponseBaselineEntry[];
+}
+
+export interface ResponseBaselineEntry {
+  readonly key: string;
+  readonly text: string;
 }
 
 export type ResponseCaptureStatus =

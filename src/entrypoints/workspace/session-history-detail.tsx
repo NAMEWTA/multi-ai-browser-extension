@@ -1,6 +1,15 @@
-import { ChevronDown, Copy, FileDown, MessageSquareText, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  FileDown,
+  MessageSquareText,
+  X,
+} from "lucide-react";
 import {
   useEffect,
+  useCallback,
   useId,
   useLayoutEffect,
   useMemo,
@@ -37,6 +46,7 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
   const latestTurnId = turns.at(-1)?.turn.id;
   const timelineRef = useRef<HTMLDivElement>(null);
   const turnElementsRef = useRef(new Map<string, HTMLElement>());
+  const navigationElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const [activeState, setActiveState] = useState<ActiveTurnState>({
     sessionId: detail.session.id,
     turnId: latestTurnId,
@@ -57,6 +67,21 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
     expansionState.sessionId === detail.session.id
       ? expansionState.exchangeIds
       : EMPTY_EXCHANGE_IDS;
+  const activeTurnIndex = Math.max(
+    0,
+    turns.findIndex(({ turn }) => turn.id === activeTurnId),
+  );
+  const activeTurn = turns[activeTurnIndex]?.turn;
+  const activateTurn = useCallback(
+    (turnId: string) => {
+      setActiveState((current) =>
+        current.sessionId === detail.session.id && current.turnId === turnId
+          ? current
+          : { sessionId: detail.session.id, turnId },
+      );
+    },
+    [detail.session.id],
+  );
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -71,12 +96,65 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
       scrollToTurn(timelineRef.current, turnElementsRef.current, latestTurnId, "auto");
   }, [detail.session.id, latestTurnId]);
 
+  useLayoutEffect(() => {
+    if (!activeTurnId) return;
+    const target = navigationElementsRef.current.get(activeTurnId);
+    if (typeof target?.scrollIntoView === "function") {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, [activeTurnId, detail.session.id]);
+
+  useEffect(() => {
+    const container = timelineRef.current;
+    if (!container || typeof IntersectionObserver === "undefined") return;
+
+    const visibleTurns = new Set<HTMLElement>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const element = entry.target as HTMLElement;
+          if (entry.isIntersecting) visibleTurns.add(element);
+          else visibleTurns.delete(element);
+        }
+
+        const containerTop = container.getBoundingClientRect().top + 12;
+        let closestId: string | undefined;
+        let closestDistance = Number.POSITIVE_INFINITY;
+        for (const element of visibleTurns) {
+          const turnId = element.dataset.turnId;
+          if (!turnId) continue;
+          const distance = Math.abs(element.getBoundingClientRect().top - containerTop);
+          if (distance < closestDistance) {
+            closestId = turnId;
+            closestDistance = distance;
+          }
+        }
+
+        if (closestId) activateTurn(closestId);
+      },
+      {
+        root: container,
+        rootMargin: "-12px 0px -70% 0px",
+        threshold: 0,
+      },
+    );
+
+    for (const element of turnElementsRef.current.values()) observer.observe(element);
+    return () => observer.disconnect();
+  }, [activateTurn, detail.session.id, turns]);
+
   function navigateToTurn(turnId: string) {
-    setActiveState({ sessionId: detail.session.id, turnId });
+    activateTurn(turnId);
     scrollToTurn(timelineRef.current, turnElementsRef.current, turnId, "smooth");
   }
 
+  function navigateBy(offset: number) {
+    const nextTurn = turns[activeTurnIndex + offset]?.turn;
+    if (nextTurn) navigateToTurn(nextTurn.id);
+  }
+
   function updateActiveTurn(event: UIEvent<HTMLDivElement>) {
+    if (typeof IntersectionObserver !== "undefined") return;
     const container = event.currentTarget;
     const containerTop = container.getBoundingClientRect().top;
     let closestId: string | undefined;
@@ -93,7 +171,7 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
     }
 
     if (closestId && closestId !== activeTurnId) {
-      setActiveState({ sessionId: detail.session.id, turnId: closestId });
+      activateTurn(closestId);
     }
   }
 
@@ -166,6 +244,7 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
                     if (element) turnElementsRef.current.set(turn.id, element);
                     else turnElementsRef.current.delete(turn.id);
                   }}
+                  data-turn-id={turn.id}
                   data-active={activeTurnId === turn.id || undefined}
                 >
                   <header className="unified-turn-header">
@@ -204,22 +283,56 @@ export function SessionHistoryDetail({ detail, onClose, onTransfer }: SessionHis
             <nav className="unified-question-navigation" aria-label="问题导航">
               <div className="unified-question-navigation-title">
                 <MessageSquareText size={14} />
-                <strong>问答导航</strong>
+                <strong>问题</strong>
+                <span aria-live="polite">
+                  {activeTurnIndex + 1} / {turns.length}
+                </span>
               </div>
-              <div className="unified-question-navigation-list">
+              <ol className="unified-question-navigation-list">
                 {turns.map(({ turn }) => (
-                  <button
-                    type="button"
-                    key={turn.id}
-                    aria-current={activeTurnId === turn.id ? "location" : undefined}
-                    aria-label={`第 ${turn.sequence} 轮：${singleLine(turn.userQuestion ?? turn.prompt)}`}
-                    title={turn.userQuestion ?? turn.prompt}
-                    onClick={() => navigateToTurn(turn.id)}
-                  >
-                    <span>{turn.sequence}</span>
-                    <strong>{turn.userQuestion ?? turn.prompt}</strong>
-                  </button>
+                  <li key={turn.id}>
+                    <button
+                      type="button"
+                      ref={(element) => {
+                        if (element) navigationElementsRef.current.set(turn.id, element);
+                        else navigationElementsRef.current.delete(turn.id);
+                      }}
+                      aria-current={activeTurnId === turn.id ? "location" : undefined}
+                      aria-label={`第 ${turn.sequence} 轮：${singleLine(turn.userQuestion ?? turn.prompt)}`}
+                      title={turn.userQuestion ?? turn.prompt}
+                      onClick={() => navigateToTurn(turn.id)}
+                    >
+                      <span aria-hidden="true">{String(turn.sequence).padStart(2, "0")}</span>
+                      <strong>{turn.userQuestion ?? turn.prompt}</strong>
+                    </button>
+                  </li>
                 ))}
+              </ol>
+              <div className="unified-question-navigation-mobile">
+                <button
+                  type="button"
+                  aria-label="上一轮问题"
+                  disabled={activeTurnIndex === 0}
+                  onClick={() => navigateBy(-1)}
+                >
+                  <ChevronLeft size={17} />
+                </button>
+                <div aria-live="polite">
+                  <span>
+                    {activeTurnIndex + 1} / {turns.length}
+                  </span>
+                  <strong title={activeTurn?.userQuestion ?? activeTurn?.prompt}>
+                    {activeTurn?.userQuestion ?? activeTurn?.prompt}
+                  </strong>
+                </div>
+                <button
+                  type="button"
+                  aria-label="下一轮问题"
+                  disabled={activeTurnIndex === turns.length - 1}
+                  onClick={() => navigateBy(1)}
+                >
+                  <ChevronRight size={17} />
+                </button>
               </div>
             </nav>
           </div>

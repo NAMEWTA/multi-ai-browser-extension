@@ -304,6 +304,71 @@ describe("BaseDomStrategy", () => {
     }
   });
 
+  it("reads a response before handling a verification challenge from the same DOM update", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const capture = new TestStrategy().captureResponse(
+        { document, window, responseTimeoutMs: 3_000 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+
+      const response = document.createElement("div");
+      response.className = "assistant-response";
+      response.textContent = "已经生成的回答";
+      const verification = document.createElement("div");
+      verification.id = "verification";
+      document.body.append(response, verification);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "partial",
+        text: "已经生成的回答",
+        markdown: "已经生成的回答",
+        message: expect.stringContaining("人工验证"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not mistake a reindexed historical response for the new answer", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <textarea id="composer"></textarea>
+        <div class="assistant-response">旧回复</div>
+      `;
+      const strategy = new TestStrategy();
+      const baseline = await strategy.prepareSubmit({ document, window, timeoutMs: 10 });
+      expect(baseline.entries).toEqual([{ key: "index:0", text: "旧回复" }]);
+      const updates = vi.fn();
+      const capture = strategy.captureResponse(
+        { document, window, responseTimeoutMs: 3_000 },
+        baseline,
+        updates,
+      );
+
+      const current = document.createElement("div");
+      current.className = "assistant-response";
+      document.querySelector(".assistant-response")?.before(current);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updates).not.toHaveBeenCalled();
+
+      current.textContent = "本轮新回复";
+      await vi.advanceTimersByTimeAsync(2_250);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        text: "本轮新回复",
+      });
+      expect(updates).not.toHaveBeenCalledWith(expect.objectContaining({ text: "旧回复" }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails capture clearly when verification appears before any response", async () => {
     vi.useFakeTimers();
     try {
