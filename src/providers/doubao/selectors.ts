@@ -1,5 +1,33 @@
 import type { ProviderSelectors } from "../../core/providers/contracts";
 
+export const doubaoNativeCopySelectors = {
+  turn: [
+    "[data-message-id]",
+    "[data-local-message-id]",
+    "[data-msg-id]",
+    "[data-testid='receive_message']",
+    "[class*='message-block-container']",
+  ],
+  action: [
+    "[class*='message-action' i]",
+    "[class*='message-toolbar' i]",
+    "[data-testid*='message_action' i]",
+    "[data-testid*='message_toolbar' i]",
+  ],
+  copy: [
+    "button[data-testid*='copy' i]",
+    "[role='button'][data-testid*='copy' i]",
+    "button[aria-label*='复制']",
+    "[role='button'][aria-label*='复制']",
+    "button[aria-label*='copy' i]",
+    "[role='button'][aria-label*='copy' i]",
+    "button[title*='复制']",
+    "[role='button'][title*='复制']",
+    "button[title*='copy' i]",
+    "[role='button'][title*='copy' i]",
+  ],
+} as const;
+
 export const doubaoSelectors = {
   composer: [
     "div.tiptap.ProseMirror[contenteditable='true'][role='textbox']",

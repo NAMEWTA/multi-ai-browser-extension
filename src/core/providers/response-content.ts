@@ -97,6 +97,13 @@ export function responseElementToMarkdown(
   return responseContentToMarkdown(cloneResponseContent(root, options).content);
 }
 
+export function responseHtmlToMarkdown(html: string, document: Document): string {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  removeExcludedContent(container, []);
+  return responseContentToMarkdown(container);
+}
+
 function responseContentToMarkdown(content: HTMLElement): string {
   try {
     return normalizeMarkdown(createTurndownService().turndown(content));

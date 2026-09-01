@@ -1492,6 +1492,8 @@ function toBufferedResponseUpdate(
     ...(update.markdown !== undefined ? { responseMarkdown: update.markdown } : {}),
     ...(update.message !== undefined ? { message: update.message } : {}),
     ...(update.terminalReason !== undefined ? { terminalReason: update.terminalReason } : {}),
+    ...(update.captureSource !== undefined ? { captureSource: update.captureSource } : {}),
+    ...(update.nativeMimeType !== undefined ? { nativeMimeType: update.nativeMimeType } : {}),
   };
 }
 
@@ -1510,6 +1512,8 @@ async function persistResponseUpdate(
       revision: update.revision,
       observedAt: update.observedAt,
       ...(update.terminalReason ? { terminalReason: update.terminalReason } : {}),
+      ...(update.captureSource ? { captureSource: update.captureSource } : {}),
+      ...(update.nativeMimeType ? { nativeMimeType: update.nativeMimeType } : {}),
     },
   );
 }

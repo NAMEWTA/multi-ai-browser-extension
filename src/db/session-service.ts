@@ -1,4 +1,9 @@
-import type { ProviderId, ResponseTerminalReason } from "../core/providers/contracts";
+import type {
+  NativeCopyMimeType,
+  ProviderId,
+  ResponseCaptureSource,
+  ResponseTerminalReason,
+} from "../core/providers/contracts";
 import { providerRegistry } from "../core/providers/registry";
 import {
   db,
@@ -51,6 +56,8 @@ export interface BufferedResponseUpdate {
   revision?: number;
   observedAt?: string;
   terminalReason?: ResponseTerminalReason;
+  captureSource?: ResponseCaptureSource;
+  nativeMimeType?: NativeCopyMimeType;
   responseText?: string;
   responseMarkdown?: string;
   message?: string;
@@ -61,6 +68,8 @@ export interface ResponseRevisionMetadata {
   revision: number;
   observedAt: string;
   terminalReason?: ResponseTerminalReason;
+  captureSource?: ResponseCaptureSource;
+  nativeMimeType?: NativeCopyMimeType;
 }
 
 export interface TurnPromptMetadata {
@@ -273,6 +282,16 @@ export async function recordSuccessfulTurn(
         : previous?.terminalReason !== undefined
           ? { terminalReason: previous.terminalReason }
           : {}),
+      ...(update.captureSource !== undefined
+        ? { captureSource: update.captureSource }
+        : previous?.captureSource !== undefined
+          ? { captureSource: previous.captureSource }
+          : {}),
+      ...(update.nativeMimeType !== undefined
+        ? { nativeMimeType: update.nativeMimeType }
+        : previous?.nativeMimeType !== undefined
+          ? { nativeMimeType: previous.nativeMimeType }
+          : {}),
       ...(responseText !== undefined ? { responseText } : {}),
       ...(responseMarkdown !== undefined ? { responseMarkdown } : {}),
       ...(message !== undefined ? { message } : {}),
@@ -309,6 +328,10 @@ export async function recordSuccessfulTurn(
         ...(response?.observedAt !== undefined ? { responseObservedAt: response.observedAt } : {}),
         ...(response?.terminalReason !== undefined
           ? { terminalReason: response.terminalReason }
+          : {}),
+        ...(response?.captureSource !== undefined ? { captureSource: response.captureSource } : {}),
+        ...(response?.nativeMimeType !== undefined
+          ? { nativeMimeType: response.nativeMimeType }
           : {}),
         ...(message !== undefined ? { message } : {}),
         ...(submitStatus !== "submitted" || TERMINAL_RESPONSE_STATUSES.has(responseStatus)
@@ -409,6 +432,12 @@ export async function applyResponseUpdate(
             ...(metadata.terminalReason !== undefined
               ? { terminalReason: metadata.terminalReason }
               : {}),
+            ...(metadata.captureSource !== undefined
+              ? { captureSource: metadata.captureSource }
+              : {}),
+            ...(metadata.nativeMimeType !== undefined
+              ? { nativeMimeType: metadata.nativeMimeType }
+              : {}),
           }
         : {}),
       ...(TERMINAL_RESPONSE_STATUSES.has(status) ? { completedAt: timestamp } : {}),
@@ -429,6 +458,12 @@ export async function applyResponseUpdate(
                   responseObservedAt: metadata.observedAt,
                   ...(metadata.terminalReason !== undefined
                     ? { terminalReason: metadata.terminalReason }
+                    : {}),
+                  ...(metadata.captureSource !== undefined
+                    ? { captureSource: metadata.captureSource }
+                    : {}),
+                  ...(metadata.nativeMimeType !== undefined
+                    ? { nativeMimeType: metadata.nativeMimeType }
                     : {}),
                 }
               : {}),

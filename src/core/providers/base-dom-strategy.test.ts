@@ -46,6 +46,29 @@ class PlannedCaptureStrategy extends BaseDomStrategy {
   }
 }
 
+class NativePlannedCaptureStrategy extends BaseDomStrategy {
+  protected override readonly nativeCopyAdapter = {
+    id: "test-native-copy",
+    locateCopyButton: (_ctx: unknown, response: HTMLElement) =>
+      response.querySelector<HTMLElement>(".copy") ?? undefined,
+  };
+
+  constructor() {
+    super(definition, {
+      composer: ["#composer"],
+      submit: ["#send"],
+      responses: [".turn"],
+      generating: [".stop"],
+      responseQuietMs: 5_000,
+      responsePollMs: 20,
+      responseCapture: {
+        turnTiers: [{ id: "turn", confidence: "canonical", selectors: [".turn"] }],
+        finalContainers: [".final"],
+      },
+    });
+  }
+}
+
 describe("BaseDomStrategy", () => {
   it("reports a website login state", async () => {
     document.body.innerHTML = '<a id="login">Login</a>';
@@ -224,7 +247,7 @@ describe("BaseDomStrategy", () => {
       response.textContent = "最终回复";
       document.body.append(response);
       await vi.advanceTimersByTimeAsync(2_250);
-      await expect(capture).resolves.toEqual({
+      await expect(capture).resolves.toMatchObject({
         status: "completed",
         terminalReason: "completed",
         text: "最终回复",
@@ -281,6 +304,42 @@ describe("BaseDomStrategy", () => {
     }
   });
 
+  it("finalizes promptly when generation stopped and the native answer copy is ready", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <button class="stop">stop</button>
+        <div class="turn" data-message-id="current">
+          <div class="final">Complete DOM answer</div>
+          <button class="copy">copy</button>
+        </div>
+      `;
+      const nativeCopy = {
+        capture: vi.fn().mockResolvedValue({
+          text: "# Complete native answer",
+          mimeType: "text/markdown",
+        }),
+      };
+      const capture = new NativePlannedCaptureStrategy().captureResponse(
+        { document, window, nativeCopy, responseTimeoutMs: 10_000 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      document.querySelector(".stop")?.remove();
+      await vi.advanceTimersByTimeAsync(1_100);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        captureSource: "native-copy",
+        markdown: "# Complete native answer",
+      });
+      expect(nativeCopy.capture).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a title-only block as uncertain partial at the deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -326,6 +385,41 @@ describe("BaseDomStrategy", () => {
         status: "partial",
         text: "部分回复",
         markdown: "**部分回复**",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a finalized rescue snapshot when the active capture is superseded", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const controller = new AbortController();
+      const capture = new TestStrategy().captureResponse(
+        { document, window, signal: controller.signal, responseTimeoutMs: 3_000 },
+        { count: 0, lastText: "" },
+        vi.fn(),
+      );
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        '<div class="assistant-response">visible fallback</div>',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      controller.abort({
+        status: "completed",
+        terminalReason: "completed",
+        text: "complete native answer",
+        markdown: "**complete native answer**",
+        captureSource: "native-copy",
+        nativeMimeType: "text/markdown",
+      });
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        text: "complete native answer",
+        captureSource: "native-copy",
       });
     } finally {
       vi.useRealTimers();

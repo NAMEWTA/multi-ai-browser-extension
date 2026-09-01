@@ -48,6 +48,14 @@ describe("turn prompt metadata and Markdown responses", () => {
       "Go is a language.",
       undefined,
       "## Go\n\nGo is a **language**.",
+      {
+        captureId: "capture-native",
+        revision: 1,
+        observedAt: "2026-09-01T08:00:00.000Z",
+        terminalReason: "completed",
+        captureSource: "native-copy",
+        nativeMimeType: "text/markdown",
+      },
     );
 
     const detail = await getSessionDetail(session.id);
@@ -59,6 +67,8 @@ describe("turn prompt metadata and Markdown responses", () => {
     expect(detail?.turns[0]?.exchanges[0]).toMatchObject({
       responseText: "Go is a language.",
       responseMarkdown: "## Go\n\nGo is a **language**.",
+      captureSource: "native-copy",
+      nativeMimeType: "text/markdown",
     });
   });
 

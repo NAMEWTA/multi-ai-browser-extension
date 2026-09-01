@@ -61,6 +61,7 @@ export interface ResponseCapturePlan {
 export interface FrameContext {
   readonly document: Document;
   readonly window: Window;
+  readonly nativeCopy?: NativeCopyClient;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly responseTimeoutMs?: number;
@@ -104,12 +105,52 @@ export type ResponseTerminalReason =
   | "failed"
   | "unsupported";
 
+export type ResponseCaptureSource = "dom" | "native-copy" | "provider-api";
+
+export type NativeCopyMimeType = "text/markdown" | "text/plain" | "text/html";
+
+export interface NativeCopyPayload {
+  readonly text: string;
+  readonly mimeType: NativeCopyMimeType;
+}
+
+export interface NativeCopyRequest {
+  readonly button: HTMLElement;
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+  readonly suppressSystemClipboard?: boolean;
+}
+
+export interface NativeCopyClient {
+  capture(request: NativeCopyRequest): Promise<NativeCopyPayload>;
+}
+
+export interface NativeCopyContext {
+  readonly turnKey: string;
+  readonly domText: string;
+  readonly domMarkdown: string;
+}
+
+export interface NativeCopyAdapter {
+  readonly id: string;
+  locateCopyButton(ctx: FrameContext, response: HTMLElement): HTMLElement | undefined;
+  prepareCopy?(
+    ctx: FrameContext,
+    response: HTMLElement,
+    button: HTMLElement | undefined,
+  ): Promise<void>;
+  isReady?(ctx: FrameContext, response: HTMLElement, button: HTMLElement): boolean;
+  normalize?(payload: NativeCopyPayload, context: NativeCopyContext): NativeCopyPayload;
+}
+
 export interface ResponseCaptureUpdate {
   readonly status: ResponseCaptureStatus;
   readonly text?: string;
   readonly markdown?: string;
   readonly message?: string;
   readonly terminalReason?: ResponseTerminalReason;
+  readonly captureSource?: ResponseCaptureSource;
+  readonly nativeMimeType?: NativeCopyMimeType;
 }
 
 export interface ComposerCandidateDiagnostic {
@@ -138,6 +179,10 @@ export interface ProviderStrategy {
     baseline: ResponseBaseline,
     onUpdate: (update: ResponseCaptureUpdate) => void | Promise<void>,
   ): Promise<ResponseCaptureUpdate>;
+  finalizeResponse?(
+    ctx: FrameContext,
+    baseline: ResponseBaseline,
+  ): Promise<ResponseCaptureUpdate | undefined>;
   startNewConversation(ctx: FrameContext): Promise<void>;
   diagnoseComposerCandidates?(ctx: FrameContext): readonly ComposerCandidateDiagnostic[];
 }

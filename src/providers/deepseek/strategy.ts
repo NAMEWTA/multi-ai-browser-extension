@@ -8,9 +8,11 @@ import {
 } from "../../core/providers/dom";
 import { ProviderError } from "../../core/providers/errors";
 import { deepseekDefinition } from "./definition";
+import { deepseekNativeCopyAdapter } from "./native-copy";
 import { deepseekSelectors } from "./selectors";
 
 export class DeepSeekStrategy extends BaseDomStrategy {
+  protected override readonly nativeCopyAdapter = deepseekNativeCopyAdapter;
   private busyControlSignature: string | undefined;
 
   constructor() {

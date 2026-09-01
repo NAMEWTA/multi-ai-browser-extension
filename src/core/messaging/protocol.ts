@@ -99,6 +99,9 @@ export const responseTerminalReasonSchema = z.enum([
   "unsupported",
 ]);
 
+export const responseCaptureSourceSchema = z.enum(["dom", "native-copy", "provider-api"]);
+export const nativeCopyMimeTypeSchema = z.enum(["text/markdown", "text/plain", "text/html"]);
+
 export const providerResponseUpdateSchema = z.object({
   type: z.literal("PROVIDER_RESPONSE_UPDATE"),
   panelId: z.string().min(1),
@@ -113,6 +116,8 @@ export const providerResponseUpdateSchema = z.object({
   markdown: z.string().max(2_000_000).optional(),
   message: z.string().max(1_000).optional(),
   terminalReason: responseTerminalReasonSchema.optional(),
+  captureSource: responseCaptureSourceSchema.optional(),
+  nativeMimeType: nativeCopyMimeTypeSchema.optional(),
 });
 
 export const workspaceResponseUpdateSchema = providerResponseUpdateSchema.extend({

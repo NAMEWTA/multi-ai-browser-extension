@@ -121,6 +121,8 @@ const exchangeSchema = z
         "unsupported",
       ])
       .optional(),
+    captureSource: z.enum(["dom", "native-copy", "provider-api"]).optional(),
+    nativeMimeType: z.enum(["text/markdown", "text/plain", "text/html"]).optional(),
     submittedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
     message: z.string().max(2_000).optional(),
@@ -288,6 +290,8 @@ export async function importHistoryJsonl(text: string): Promise<ImportSummary> {
       ? { responseObservedAt: exchange.responseObservedAt }
       : {}),
     ...(exchange.terminalReason !== undefined ? { terminalReason: exchange.terminalReason } : {}),
+    ...(exchange.captureSource !== undefined ? { captureSource: exchange.captureSource } : {}),
+    ...(exchange.nativeMimeType !== undefined ? { nativeMimeType: exchange.nativeMimeType } : {}),
     ...(exchange.submittedAt !== undefined ? { submittedAt: exchange.submittedAt } : {}),
     ...(exchange.completedAt !== undefined ? { completedAt: exchange.completedAt } : {}),
     ...(exchange.message !== undefined ? { message: exchange.message } : {}),

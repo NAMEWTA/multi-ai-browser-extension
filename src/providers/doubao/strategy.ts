@@ -9,9 +9,12 @@ import {
 } from "../../core/providers/dom";
 import { ProviderError } from "../../core/providers/errors";
 import { doubaoDefinition } from "./definition";
+import { doubaoNativeCopyAdapter } from "./native-copy";
 import { doubaoSelectors } from "./selectors";
 
 export class DoubaoStrategy extends BaseDomStrategy {
+  protected override readonly nativeCopyAdapter = doubaoNativeCopyAdapter;
+
   constructor() {
     super(doubaoDefinition, doubaoSelectors);
   }

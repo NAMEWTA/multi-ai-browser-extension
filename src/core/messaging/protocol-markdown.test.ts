@@ -14,10 +14,13 @@ describe("provider response Markdown protocol", () => {
       observedAt: "2026-09-01T08:00:00.000Z",
       status: "completed",
       terminalReason: "completed",
+      captureSource: "native-copy",
+      nativeMimeType: "text/markdown",
       text: "Title",
       markdown: "# Title",
     });
 
     expect(parsed.markdown).toBe("# Title");
+    expect(parsed.captureSource).toBe("native-copy");
   });
 });

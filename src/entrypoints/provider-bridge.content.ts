@@ -23,6 +23,7 @@ import {
 } from "../runtime/provider-status";
 import { connectProviderPort } from "../runtime/provider-port";
 import { appendProviderDiagnostic, describeProviderElement } from "../runtime/provider-diagnostics";
+import { createNativeCopyClient } from "../runtime/native-copy-client";
 
 interface PreparedTurn {
   sessionId: string;
@@ -35,6 +36,7 @@ interface ActiveCapture {
   turnId: string;
   controller: AbortController;
   completion: Promise<void>;
+  finalize: () => Promise<ResponseCaptureUpdate | undefined>;
 }
 
 export default defineContentScript({
@@ -64,7 +66,13 @@ export default defineContentScript({
       () => undefined,
     );
 
-    const ctx = { document, window, timeoutMs: 15_000, responseTimeoutMs: 180_000 };
+    const ctx = {
+      document,
+      window,
+      nativeCopy: createNativeCopyClient(window),
+      timeoutMs: 15_000,
+      responseTimeoutMs: 180_000,
+    };
 
     const reportResponse = async (
       command: CommitPromptMessage,
@@ -87,6 +95,8 @@ export default defineContentScript({
           ...(update.markdown !== undefined ? { markdown: update.markdown } : {}),
           ...(update.message ? { message: update.message } : {}),
           ...(update.terminalReason ? { terminalReason: update.terminalReason } : {}),
+          ...(update.captureSource ? { captureSource: update.captureSource } : {}),
+          ...(update.nativeMimeType ? { nativeMimeType: update.nativeMimeType } : {}),
         })
         .catch(() => undefined);
       void appendProviderDiagnostic(panelId, plugin.definition.id, {
@@ -127,7 +137,8 @@ export default defineContentScript({
     const stopActiveCapture = async (): Promise<void> => {
       const current = activeCapture;
       if (!current) return;
-      current.controller.abort();
+      const rescued = await current.finalize().catch(() => undefined);
+      current.controller.abort(rescued);
       await current.completion.catch(() => undefined);
       if (activeCapture === current) activeCapture = undefined;
     };
@@ -138,6 +149,7 @@ export default defineContentScript({
         turnId: command.turnId,
         controller,
         completion: Promise.resolve(),
+        finalize: () => strategy.finalizeResponse?.(ctx, baseline) ?? Promise.resolve(undefined),
       };
       capture.completion = captureResponse(command, baseline, controller.signal).finally(() => {
         if (activeCapture === capture) activeCapture = undefined;
@@ -184,8 +196,8 @@ export default defineContentScript({
               status: "duplicate",
             };
           }
-          await stopActiveCapture();
           const baseline = await strategy.prepareSubmit(ctx);
+          await stopActiveCapture();
           preparedTurns.set(command.turnId, {
             sessionId: command.sessionId,
             prompt: command.prompt,
