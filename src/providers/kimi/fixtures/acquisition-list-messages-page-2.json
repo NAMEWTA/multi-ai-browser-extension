@@ -1,0 +1,39 @@
+{
+  "messages": [
+    {
+      "id": "assistant-1",
+      "parentId": "user-1",
+      "role": "ROLE_ASSISTANT",
+      "status": "MESSAGE_STATUS_FINISHED",
+      "createTime": "2026-09-01T10:01:00Z",
+      "blocks": [
+        {
+          "id": "block-2",
+          "messageId": "assistant-1",
+          "think": { "content": "Internal reasoning must not be exported." }
+        },
+        {
+          "id": "block-2-final",
+          "messageId": "assistant-1",
+          "text": { "content": "First answer belongs only to the first prompt." }
+        }
+      ]
+    },
+    {
+      "id": "user-1",
+      "parentId": "",
+      "role": "ROLE_USER",
+      "status": "MESSAGE_STATUS_FINISHED",
+      "createTime": "2026-09-01T10:00:00Z",
+      "blocks": [
+        {
+          "id": "block-1",
+          "messageId": "user-1",
+          "text": { "content": "first prompt" }
+        }
+      ]
+    }
+  ],
+  "nextPageToken": "",
+  "totalCount": 4
+}

@@ -1,0 +1,22 @@
+{
+  "biz_data": {
+    "messages": [
+      {
+        "id": "root-user",
+        "role": "human",
+        "sequence": 10,
+        "content": "Legacy prompt"
+      },
+      {
+        "id": "leaf-assistant",
+        "parentId": "root-user",
+        "role": "model",
+        "sequence": 20,
+        "content": [
+          { "type": "reasoning", "text": "not public" },
+          { "type": "markdown", "markdown": "Legacy **answer**" }
+        ]
+      }
+    ]
+  }
+}

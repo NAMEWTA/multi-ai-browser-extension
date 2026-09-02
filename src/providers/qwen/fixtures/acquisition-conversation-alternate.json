@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "result": {
+    "conversation": {
+      "id": "alternate-chat",
+      "title": "Alternate envelope",
+      "current_message_id": "alternate-answer",
+      "messages": [
+        {
+          "message_id": "alternate-user",
+          "role": "human",
+          "sequence": 1,
+          "content": { "text": "Alternate prompt" }
+        },
+        {
+          "message_id": "alternate-answer",
+          "parent_message_id": "alternate-user",
+          "role": "model",
+          "sequence": 2,
+          "content": [
+            { "type": "reasoning", "text": "not exported" },
+            { "type": "markdown", "markdown": "Alternate **answer**" }
+          ]
+        }
+      ]
+    },
+    "has_more": false,
+    "message_count": 2
+  }
+}

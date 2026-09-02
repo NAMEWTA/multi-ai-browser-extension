@@ -24,6 +24,7 @@ import {
 import { connectProviderPort } from "../runtime/provider-port";
 import { appendProviderDiagnostic, describeProviderElement } from "../runtime/provider-diagnostics";
 import { createNativeCopyClient } from "../runtime/native-copy-client";
+import { createAcquisitionNetworkClient } from "../runtime/acquisition-network-client";
 
 interface PreparedTurn {
   sessionId: string;
@@ -70,6 +71,7 @@ export default defineContentScript({
       document,
       window,
       nativeCopy: createNativeCopyClient(window),
+      acquisitionNetwork: createAcquisitionNetworkClient(window),
       timeoutMs: 15_000,
       responseTimeoutMs: 180_000,
     };
@@ -97,6 +99,7 @@ export default defineContentScript({
           ...(update.terminalReason ? { terminalReason: update.terminalReason } : {}),
           ...(update.captureSource ? { captureSource: update.captureSource } : {}),
           ...(update.nativeMimeType ? { nativeMimeType: update.nativeMimeType } : {}),
+          ...(update.acquisition ? { acquisition: update.acquisition } : {}),
         })
         .catch(() => undefined);
       void appendProviderDiagnostic(panelId, plugin.definition.id, {

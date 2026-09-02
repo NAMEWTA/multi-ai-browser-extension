@@ -1,0 +1,36 @@
+export { acquireConversation, AcquisitionSelectionError } from "./engine";
+export { evaluateAcquisitionQuality, messageBody } from "./quality-gate";
+export {
+  collectVirtualDomMessages,
+  VirtualDomCollectionError,
+  type VirtualDomCollection,
+  type VirtualDomCollectorAdapter,
+  type VirtualDomCollectorOptions,
+  type VirtualMessageRevision,
+} from "./virtual-dom-collector";
+export {
+  acquisitionSources,
+  type AcquisitionAttempt,
+  type AcquisitionAttemptStatus,
+  type AcquisitionCompleteness,
+  type AcquisitionCompletenessState,
+  type AcquisitionContext,
+  type AcquisitionDiagnostic,
+  type AcquisitionDiagnostics,
+  type AcquisitionDiagnosticSeverity,
+  type AcquisitionEvidence,
+  type AcquisitionMetadataValue,
+  type AcquisitionQualityPolicy,
+  type AcquisitionQualityReport,
+  type AcquisitionSelection,
+  type AcquisitionSource,
+  type AcquisitionStrategy,
+  type BranchEvidence,
+  type ContentBlock,
+  type ContentBlockKind,
+  type ConversationRole,
+  type ConversationSnapshot,
+  type CursorEvidence,
+  type Message,
+  type ProviderAcquisitionAdapter,
+} from "./contracts";

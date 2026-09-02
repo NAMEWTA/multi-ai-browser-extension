@@ -11,6 +11,14 @@ import type {
   ResponseCaptureUpdate,
 } from "./contracts";
 import {
+  AcquisitionSelectionError,
+  acquireConversation,
+  messageBody,
+  type ConversationSnapshot,
+  type Message,
+  type ProviderAcquisitionAdapter,
+} from "../acquisition";
+import {
   findFirstUsable,
   findUsableByText,
   isElementUsable,
@@ -22,7 +30,12 @@ import {
 } from "./dom";
 import { ProviderError } from "./errors";
 import { captureNativeTarget } from "./native-copy";
-import { readResponseContent, type ResponseContentSnapshot } from "./response-content";
+import {
+  readResponseContent,
+  responseElementToMarkdown,
+  responseElementToText,
+  type ResponseContentSnapshot,
+} from "./response-content";
 import { ButtonSubmitter } from "./submitters/button-submitter";
 import { CompositeComposerWriter } from "./writers/composer-writer";
 
@@ -30,6 +43,8 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
   protected activeComposer: HTMLElement | undefined;
   protected stagedSubmitControl: HTMLElement | undefined;
   protected readonly nativeCopyAdapter?: NativeCopyAdapter;
+  protected readonly acquisitionAdapter?: ProviderAcquisitionAdapter;
+  protected readonly acquisitionAdapterVersion: string = "dom-capture-v2";
 
   protected constructor(
     readonly definition: ProviderDefinition,
@@ -159,19 +174,15 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate> {
     const adapter = this.nativeCopyAdapter;
-    if (!adapter || !ctx.nativeCopy) {
-      return {
-        status: "unsupported",
-        terminalReason: "unsupported",
-        message: "当前站点未提供原生 Copy 回复采集能力",
-      };
-    }
-
     const timeoutMs = this.selectors.responseTimeoutMs ?? ctx.responseTimeoutMs ?? 180_000;
     const pollMs = this.selectors.responsePollMs ?? 1_000;
-    const stableMs = Math.max(
+    const terminalStableMs = Math.max(
       250,
-      Math.min(adapter.capturePolicy?.terminalStableMs ?? 1_500, 10_000),
+      Math.min(adapter?.capturePolicy?.terminalStableMs ?? 1_500, 10_000),
+    );
+    const quietStableMs = Math.max(
+      terminalStableMs,
+      Math.min(this.selectors.responseQuietMs ?? 6_000, 15_000),
     );
     const startedAt = Date.now();
     const capturePlan = this.selectors.responseCapture;
@@ -187,6 +198,8 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
       let terminalFingerprint: string | undefined;
       let terminalObservedAt: number | undefined;
       let captureAttempted = false;
+      let generationObserved = false;
+      let nextProviderAttemptAt = startedAt + Math.min(500, pollMs);
 
       const observer = new MutationObserver(() => scheduleCheck());
       const poll = ctx.window.setInterval(() => scheduleCheck(), pollMs);
@@ -273,34 +286,67 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
           }
 
           const target = selectNativeCopyTarget(adapter, ctx, baseline, prompt?.text);
+          const snapshots = this.responseSnapshots(ctx.document);
+          const snapshot = selectChangedResponseSnapshot(snapshots, baseline);
           const now = Date.now();
-          if (target && !captureAttempted && adapter.isTerminalTarget?.(ctx, target) === true) {
-            const fingerprint = nativeCopyTargetFingerprint(target);
+          const generating = this.isGenerating(ctx.document);
+          if (generating) generationObserved = true;
+          if (
+            !generating &&
+            this.acquisitionAdapter &&
+            ctx.acquisitionNetwork &&
+            prompt?.text &&
+            now >= nextProviderAttemptAt
+          ) {
+            nextProviderAttemptAt = now + Math.max(1_000, pollMs);
+            const providerResponse = await this.acquireProviderResponse(
+              ctx,
+              baseline,
+              prompt,
+            ).catch(() => undefined);
+            if (providerResponse) {
+              finish(providerResponse);
+              return;
+            }
+          }
+          const nativeTerminal = Boolean(
+            target && adapter?.isTerminalTarget?.(ctx, target) === true,
+          );
+          const stableWithoutGenerating =
+            capturePlan?.allowStableCompletionWithoutGenerating === true;
+          const canSettle =
+            !generating &&
+            Boolean(snapshot || target) &&
+            (nativeTerminal || generationObserved || stableWithoutGenerating);
+
+          if (canSettle && !captureAttempted) {
+            const fingerprint = target
+              ? nativeCopyTargetFingerprint(target)
+              : responseSnapshotFingerprint(snapshot!);
             if (terminalFingerprint !== fingerprint) {
               terminalFingerprint = fingerprint;
               terminalObservedAt = now;
             }
             const stableFor = now - (terminalObservedAt ?? now);
-            if (stableFor >= stableMs) {
+            const requiredStableMs =
+              nativeTerminal || generationObserved ? terminalStableMs : quietStableMs;
+            if (stableFor >= requiredStableMs) {
               captureAttempted = true;
-              const snapshots = this.responseSnapshots(ctx.document);
-              const snapshot = bestResponseSnapshot(
-                snapshots.filter((candidate) =>
-                  responseContains(target.response, candidate.element),
-                ),
-              );
-              const native = await captureNativeTarget(
-                adapter,
+              const acquired = await this.acquireTerminalResponse(
                 ctx,
+                baseline,
+                prompt,
                 target,
                 snapshot,
-                prompt,
               ).catch(() => undefined);
-              if (native) {
-                finish(native);
+              if (acquired) {
+                finish(acquired);
                 return;
               }
-              if (!target.response.isConnected || !target.button.isConnected) {
+              if (
+                (target && (!target.response.isConnected || !target.button.isConnected)) ||
+                (snapshot && !snapshot.element.isConnected)
+              ) {
                 captureAttempted = false;
                 resetTerminalStability();
                 scheduleStableCheck(250);
@@ -309,11 +355,11 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
               finish({
                 status: "failed",
                 terminalReason: "failed",
-                message: "官网回复已结束，但从本轮原生 Copy 按钮取得的内容无效",
+                message: "官网回复已结束，但 API、原生 Copy 和当前轮 DOM 均未通过完整性校验",
               });
               return;
             }
-            scheduleStableCheck(stableMs - stableFor);
+            scheduleStableCheck(requiredStableMs - stableFor);
           } else if (!captureAttempted) {
             resetTerminalStability();
           }
@@ -322,14 +368,14 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
             finish({
               status: "timeout",
               terminalReason: "timeout",
-              message: "等待本轮回复的原生 Copy 按钮进入稳定终态超时",
+              message: "等待本轮回复进入可验证终态超时",
             });
           }
         } catch {
           finish({
             status: "failed",
             terminalReason: "failed",
-            message: "原生 Copy 回复采集失败",
+            message: "回复采集引擎运行失败",
           });
         } finally {
           checking = false;
@@ -362,20 +408,167 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     });
   }
 
+  protected async acquireTerminalResponse(
+    ctx: FrameContext,
+    baseline: ResponseBaseline,
+    prompt: PromptPayload | undefined,
+    target?: NativeCopyTarget,
+    snapshot?: ResponseContentSnapshot,
+  ): Promise<ResponseCaptureUpdate | undefined> {
+    const acquisitionContext = {
+      providerId: this.definition.id,
+      document: ctx.document,
+      window: ctx.window,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+      data: {
+        baseline,
+        prompt: prompt?.text,
+        url: ctx.window.location.href,
+        network: ctx.acquisitionNetwork,
+        acquisitionObservedAfter: baseline.acquisitionObservedAfter,
+      },
+    } as const;
+
+    const providerResponse = await this.acquireProviderResponse(ctx, baseline, prompt);
+    if (providerResponse) return providerResponse;
+
+    if (target && this.nativeCopyAdapter && ctx.nativeCopy) {
+      const scopedSnapshot =
+        bestResponseSnapshot(
+          this.responseSnapshots(ctx.document).filter((candidate) =>
+            responseContains(target.response, candidate.element),
+          ),
+        ) ?? snapshot;
+      const native = await captureNativeTarget(
+        this.nativeCopyAdapter,
+        ctx,
+        target,
+        scopedSnapshot,
+        prompt,
+      ).catch(() => undefined);
+      if (native?.text || native?.markdown) {
+        const canonical = singleResponseSnapshot(
+          this.definition.id,
+          ctx.window.location.href,
+          target.key,
+          native.text ?? native.markdown ?? "",
+          native.markdown ?? native.text ?? "",
+          "native-copy",
+          "native-copy-current-turn",
+        );
+        return {
+          ...native,
+          acquisition: {
+            snapshot: canonical,
+            providerMessageId: target.key,
+            adapterVersion: `${this.definition.id}-native-copy-v2`,
+            verification: "verified",
+          },
+        };
+      }
+    }
+
+    const domSnapshot =
+      (target
+        ? bestResponseSnapshot(
+            this.responseSnapshots(ctx.document).filter((candidate) =>
+              responseContains(target.response, candidate.element),
+            ),
+          )
+        : undefined) ??
+      snapshot ??
+      selectChangedResponseSnapshot(this.responseSnapshots(ctx.document), baseline);
+    const domOptions = responseContentOptions(this.selectors);
+    const domText =
+      domSnapshot?.text.trim() ||
+      (target ? responseElementToText(target.response, domOptions).trim() : "");
+    if (!domText) return undefined;
+    const domMarkdown =
+      domSnapshot?.markdown.trim() ||
+      (target ? responseElementToMarkdown(target.response, domOptions).trim() : "") ||
+      domText;
+    const canonical = singleResponseSnapshot(
+      this.definition.id,
+      ctx.window.location.href,
+      domSnapshot?.key ?? target?.key ?? `dom:${Date.now()}`,
+      domText,
+      domMarkdown,
+      "dom",
+      "scoped-terminal-dom",
+    );
+    const fallbackAdapter: ProviderAcquisitionAdapter = {
+      providerId: this.definition.id,
+      strategiesByPriority: [
+        {
+          id: "scoped-terminal-dom",
+          source: "dom",
+          acquire: async () => canonical,
+        },
+      ],
+      qualityPolicy: { requireComplete: true },
+    };
+    try {
+      const selected = await acquireConversation(fallbackAdapter, acquisitionContext);
+      const current = selected.snapshot.messages[0];
+      return current
+        ? responseUpdateFromSnapshot(
+            selected.snapshot,
+            current,
+            "scoped-terminal-dom-v2",
+            "bounded",
+          )
+        : undefined;
+    } catch (error) {
+      if (error instanceof AcquisitionSelectionError) return undefined;
+      throw error;
+    }
+  }
+
+  protected async acquireProviderResponse(
+    ctx: FrameContext,
+    baseline: ResponseBaseline,
+    prompt: PromptPayload | undefined,
+  ): Promise<ResponseCaptureUpdate | undefined> {
+    if (!this.acquisitionAdapter || !prompt?.text) return undefined;
+    const acquisitionContext = {
+      providerId: this.definition.id,
+      document: ctx.document,
+      window: ctx.window,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+      data: {
+        baseline,
+        prompt: prompt.text,
+        url: ctx.window.location.href,
+        network: ctx.acquisitionNetwork,
+        acquisitionObservedAfter: baseline.acquisitionObservedAfter,
+      },
+    } as const;
+    try {
+      const selected = await acquireConversation(this.acquisitionAdapter, acquisitionContext);
+      const current = selectAssistantForPrompt(selected.snapshot, prompt.text);
+      return current
+        ? responseUpdateFromSnapshot(selected.snapshot, current, this.acquisitionAdapterVersion)
+        : undefined;
+    } catch (error) {
+      if (error instanceof AcquisitionSelectionError) return undefined;
+      throw error;
+    }
+  }
+
   async finalizeResponse(
     ctx: FrameContext,
     baseline: ResponseBaseline,
     prompt?: PromptPayload,
   ): Promise<ResponseCaptureUpdate | undefined> {
     const adapter = this.nativeCopyAdapter;
-    if (!adapter || !ctx.nativeCopy) return undefined;
     const target = selectNativeCopyTarget(adapter, ctx, baseline, prompt?.text);
-    if (!target || adapter.isTerminalTarget?.(ctx, target) !== true) return undefined;
-    const snapshots = this.responseSnapshots(ctx.document);
-    const snapshot = bestResponseSnapshot(
-      snapshots.filter((candidate) => responseContains(target.response, candidate.element)),
+    const snapshot = selectChangedResponseSnapshot(this.responseSnapshots(ctx.document), baseline);
+    if (this.isGenerating(ctx.document) || (!target && !snapshot && !this.acquisitionAdapter)) {
+      return undefined;
+    }
+    return await this.acquireTerminalResponse(ctx, baseline, prompt, target, snapshot).catch(
+      () => undefined,
     );
-    return await captureNativeTarget(adapter, ctx, target, snapshot, prompt).catch(() => undefined);
   }
 
   async startNewConversation(ctx: FrameContext): Promise<void> {
@@ -437,6 +630,7 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     return {
       count: responses.length,
       lastText: last?.text ?? "",
+      ...(this.acquisitionAdapter ? { acquisitionObservedAfter: Date.now() } : {}),
       ...(responses.length ? { keys: responses.map((response) => response.key) } : {}),
       ...(last ? { lastKey: last.key } : {}),
       ...(responses.length ? { entries: responses.map(({ key, text }) => ({ key, text })) } : {}),
@@ -472,6 +666,12 @@ export abstract class BaseDomStrategy implements ProviderStrategy {
     return undefined;
   }
 
+  protected isGenerating(document: Document): boolean {
+    return Boolean(
+      this.selectors.generating?.length && findFirstUsable(document, this.selectors.generating),
+    );
+  }
+
   protected findBlocked(document: Document): HTMLElement | undefined {
     return this.selectors.blocked ? findFirstUsable(document, this.selectors.blocked) : undefined;
   }
@@ -500,6 +700,10 @@ let nextNativeCopyElementId = 1;
 function nativeCopyTargetFingerprint(target: NativeCopyTarget): string {
   const content = (target.response.textContent ?? "").replace(/\s+/g, " ").trim();
   return `${target.key}\u0000${nativeCopyElementId(target.response)}\u0000${nativeCopyElementId(target.button)}\u0000${textFingerprint(content)}`;
+}
+
+function responseSnapshotFingerprint(snapshot: ResponseContentSnapshot): string {
+  return `${snapshot.key}\u0000${snapshot.candidateId}\u0000${textFingerprint(snapshot.text)}`;
 }
 
 function nativeCopyElementId(element: HTMLElement): number {
@@ -532,6 +736,167 @@ function bestResponseSnapshot(
   snapshots: readonly ResponseContentSnapshot[],
 ): ResponseContentSnapshot | undefined {
   return snapshots.toSorted(compareResponseSnapshots).at(-1);
+}
+
+function selectChangedResponseSnapshot(
+  snapshots: readonly ResponseContentSnapshot[],
+  baseline: ResponseBaseline,
+): ResponseContentSnapshot | undefined {
+  const previous = new Map((baseline.entries ?? []).map((entry) => [entry.key, entry.text]));
+  const changed = snapshots.filter(
+    (snapshot) =>
+      !snapshot.statusOnly &&
+      Boolean(snapshot.text.trim()) &&
+      (!previous.has(snapshot.key) || previous.get(snapshot.key) !== snapshot.text),
+  );
+  return bestResponseSnapshot(changed);
+}
+
+function responseContentOptions(selectors: ProviderSelectors) {
+  const capturePlan = selectors.responseCapture;
+  return {
+    ...(capturePlan?.finalContainers ? { finalContainers: capturePlan.finalContainers } : {}),
+    ...(capturePlan?.contentBlocks
+      ? { contentBlocks: capturePlan.contentBlocks }
+      : selectors.responseContent
+        ? { content: selectors.responseContent }
+        : {}),
+    ...(capturePlan?.exclude
+      ? { exclude: capturePlan.exclude }
+      : selectors.responseExclude
+        ? { exclude: selectors.responseExclude }
+        : {}),
+    ...(capturePlan?.statusOnly ? { statusOnly: capturePlan.statusOnly } : {}),
+  };
+}
+
+function singleResponseSnapshot(
+  providerId: ProviderDefinition["id"],
+  url: string,
+  messageId: string,
+  text: string,
+  markdown: string,
+  source: ConversationSnapshot["source"],
+  strategyId: string,
+): ConversationSnapshot {
+  const normalizedText = text.replace(/\r\n?/g, "\n").trim();
+  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n").trim();
+  return {
+    schemaVersion: 1,
+    providerId,
+    conversationId: conversationIdentity(providerId, url),
+    url,
+    capturedAt: Date.now(),
+    messages: [
+      {
+        id: messageId,
+        role: "assistant",
+        content: [
+          {
+            kind: "paragraph",
+            text: normalizedText,
+            markdown: normalizedMarkdown || normalizedText,
+          },
+        ],
+      },
+    ],
+    source,
+    completeness: {
+      state: "complete",
+      capturedMessageCount: 1,
+      expectedMessageCount: 1,
+      capturedContentChars: normalizedText.length,
+      expectedContentChars: normalizedText.length,
+      hasBeginning: true,
+      hasEnd: true,
+    },
+    evidence: {
+      stableMessageKeys: [messageId],
+      signals: ["terminal-dom-stable", strategyId],
+    },
+    diagnostics: { strategyId, entries: [] },
+  };
+}
+
+function selectAssistantForPrompt(
+  snapshot: ConversationSnapshot,
+  prompt: string | undefined,
+): Message | undefined {
+  const messages = snapshot.messages;
+  if (!prompt) return messages.findLast((message) => message.role === "assistant");
+  const expected = comparablePrompt(prompt);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user" || comparablePrompt(messageBody(message)) !== expected) continue;
+    return messages.slice(index + 1).findLast((candidate) => candidate.role === "assistant");
+  }
+  return undefined;
+}
+
+function responseUpdateFromSnapshot(
+  snapshot: ConversationSnapshot,
+  message: Message,
+  adapterVersion: string,
+  verification: "verified" | "bounded" | "partial" | "unknown" = snapshotVerification(snapshot),
+): ResponseCaptureUpdate {
+  const text = messageBody(message);
+  const markdown = message.content
+    .map((block) => (block.markdown ?? block.text).trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return {
+    status: snapshot.completeness.state === "complete" ? "completed" : "partial",
+    terminalReason: snapshot.completeness.state === "complete" ? "completed" : "uncertain-final",
+    text,
+    markdown: markdown || text,
+    captureSource: snapshot.source,
+    acquisition: {
+      snapshot,
+      providerMessageId: message.id,
+      adapterVersion,
+      verification,
+    },
+  };
+}
+
+function snapshotVerification(
+  snapshot: ConversationSnapshot,
+): "verified" | "bounded" | "partial" | "unknown" {
+  const signal = snapshot.evidence.signals.find((entry) => entry.startsWith("verification:"));
+  const declared = signal?.slice("verification:".length);
+  if (
+    declared === "verified" ||
+    declared === "bounded" ||
+    declared === "partial" ||
+    declared === "unknown"
+  ) {
+    return declared;
+  }
+  if (snapshot.completeness.state === "unknown") return "unknown";
+  if (snapshot.completeness.state === "partial") return "partial";
+  return snapshot.source === "provider-api" || snapshot.source === "native-copy"
+    ? "verified"
+    : "bounded";
+}
+
+function conversationIdentity(providerId: ProviderDefinition["id"], value: string): string {
+  const url = new URL(value);
+  const queryId =
+    url.searchParams.get("conversation_id") ??
+    url.searchParams.get("conversationId") ??
+    url.searchParams.get("chat_id") ??
+    url.searchParams.get("session_id");
+  if (queryId) return queryId;
+  const segments = url.pathname.split("/").filter(Boolean);
+  const tail = segments.at(-1);
+  return tail && !["chat", "new", "conversation"].includes(tail.toLocaleLowerCase())
+    ? tail
+    : `${providerId}:${url.origin}${url.pathname}`;
+}
+
+function comparablePrompt(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/g, " ").trim();
 }
 
 function compareResponseSnapshots(

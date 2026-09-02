@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { acquisitionSources } from "../acquisition/contracts";
 import { providerIds } from "../providers/contracts";
 import { providerErrorCodes } from "../providers/errors";
 
@@ -99,8 +100,105 @@ export const responseTerminalReasonSchema = z.enum([
   "unsupported",
 ]);
 
-export const responseCaptureSourceSchema = z.enum(["dom", "native-copy", "provider-api"]);
+export const responseCaptureSourceSchema = z.enum([
+  "dom",
+  "native-copy",
+  "provider-api",
+  "network",
+  "virtual-dom",
+]);
 export const nativeCopyMimeTypeSchema = z.enum(["text/markdown", "text/plain", "text/html"]);
+
+const acquisitionMetadataValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const acquisitionContentBlockSchema = z.object({
+  kind: z.enum([
+    "paragraph",
+    "heading",
+    "code",
+    "list",
+    "table",
+    "quote",
+    "math",
+    "image",
+    "attachment",
+    "unknown",
+  ]),
+  text: z.string().max(2_000_000),
+  markdown: z.string().max(2_000_000).optional(),
+  language: z.string().max(100).optional(),
+  url: z.string().max(4_000).optional(),
+  attributes: z.record(z.string(), acquisitionMetadataValueSchema).optional(),
+});
+const acquisitionMessageSchema = z.object({
+  id: z.string().min(1).max(500),
+  role: z.enum(["user", "assistant", "system", "tool", "unknown"]),
+  content: z.array(acquisitionContentBlockSchema).max(200),
+  parentId: z.string().max(500).optional(),
+  branchId: z.string().max(500).optional(),
+  createdAt: z.number().finite().optional(),
+});
+const acquisitionSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  providerId: providerIdSchema,
+  conversationId: z.string().min(1).max(1_000).optional(),
+  title: z.string().max(2_000).optional(),
+  url: z.string().max(4_000).optional(),
+  capturedAt: z.number().finite(),
+  messages: z.array(acquisitionMessageSchema).max(20_000),
+  source: z.enum(acquisitionSources),
+  completeness: z.object({
+    state: z.enum(["complete", "partial", "unknown"]),
+    capturedMessageCount: z.number().int().nonnegative(),
+    expectedMessageCount: z.number().int().nonnegative().optional(),
+    capturedContentChars: z.number().int().nonnegative(),
+    expectedContentChars: z.number().int().nonnegative().optional(),
+    hasBeginning: z.boolean().optional(),
+    hasEnd: z.boolean().optional(),
+  }),
+  evidence: z.object({
+    stableMessageKeys: z.array(z.string().max(500)).max(20_000),
+    signals: z.array(z.string().max(500)).max(200),
+    cursor: z
+      .object({
+        value: z.string().max(1_000).optional(),
+        hasMore: z.boolean(),
+        reachedStart: z.boolean().optional(),
+        reachedEnd: z.boolean().optional(),
+      })
+      .optional(),
+    branch: z
+      .object({
+        branchId: z.string().max(500).optional(),
+        currentNodeId: z.string().max(500).optional(),
+        capturedNodeIds: z.array(z.string().max(500)).max(20_000),
+        linearized: z.boolean(),
+        complete: z.boolean(),
+      })
+      .optional(),
+  }),
+  diagnostics: z.object({
+    strategyId: z.string().min(1).max(200),
+    durationMs: z.number().finite().nonnegative().optional(),
+    entries: z
+      .array(
+        z.object({
+          code: z.string().min(1).max(200),
+          severity: z.enum(["info", "warning", "error"]),
+          message: z.string().max(2_000),
+          messageId: z.string().max(500).optional(),
+          details: z.record(z.string(), acquisitionMetadataValueSchema).optional(),
+        }),
+      )
+      .max(500),
+  }),
+});
+
+const responseAcquisitionSchema = z.object({
+  snapshot: acquisitionSnapshotSchema,
+  providerMessageId: z.string().min(1).max(500),
+  adapterVersion: z.string().min(1).max(100),
+  verification: z.enum(["verified", "bounded", "partial", "unknown"]),
+});
 
 const responseUpdateBodySchema = z.object({
   panelId: z.string().min(1),
@@ -117,6 +215,7 @@ const responseUpdateBodySchema = z.object({
   terminalReason: responseTerminalReasonSchema.optional(),
   captureSource: responseCaptureSourceSchema.optional(),
   nativeMimeType: nativeCopyMimeTypeSchema.optional(),
+  acquisition: responseAcquisitionSchema.optional(),
 });
 
 function responseUpdateSchemaFor<
@@ -134,18 +233,25 @@ function responseUpdateSchemaFor<
           message: "Response body is allowed only on a terminal capture update",
         });
       }
-      if (update.captureSource !== "native-copy") {
+      if (!update.captureSource) {
         context.addIssue({
           code: "custom",
           path: ["captureSource"],
-          message: "Response body must originate from the provider native Copy action",
+          message: "Response body must declare its acquisition source",
         });
       }
-      if (!update.nativeMimeType) {
+      if (update.captureSource === "native-copy" && !update.nativeMimeType) {
         context.addIssue({
           code: "custom",
           path: ["nativeMimeType"],
           message: "Native response body must declare its clipboard MIME type",
+        });
+      }
+      if (update.captureSource !== "native-copy" && !update.acquisition) {
+        context.addIssue({
+          code: "custom",
+          path: ["acquisition"],
+          message: "Non-clipboard response body must include acquisition evidence",
         });
       }
     });

@@ -261,7 +261,7 @@ export async function recordSuccessfulTurn(
     const message = update.message ?? previous?.message;
     const captureSource = update.captureSource ?? previous?.captureSource;
     const nativeMimeType = update.nativeMimeType ?? previous?.nativeMimeType;
-    assertNativeCopyResponseBody(
+    assertCapturedResponseBody(
       update.status,
       responseText,
       responseMarkdown,
@@ -399,7 +399,7 @@ export async function applyResponseUpdate(
   responseMarkdown?: string,
   metadata?: ResponseRevisionMetadata,
 ): Promise<void> {
-  assertNativeCopyResponseBody(
+  assertCapturedResponseBody(
     status,
     responseText,
     responseMarkdown,
@@ -497,7 +497,7 @@ export async function applyResponseUpdate(
   });
 }
 
-function assertNativeCopyResponseBody(
+function assertCapturedResponseBody(
   status: ExchangeResponseStatus,
   responseText: string | undefined,
   responseMarkdown: string | undefined,
@@ -505,12 +505,12 @@ function assertNativeCopyResponseBody(
   nativeMimeType: NativeCopyMimeType | undefined,
 ): void {
   if (responseText === undefined && responseMarkdown === undefined) return;
-  if (
-    (status !== "completed" && status !== "partial") ||
-    captureSource !== "native-copy" ||
-    nativeMimeType === undefined
-  ) {
-    throw new Error("回复正文只能由终态原生 Copy 结果持久化");
+  if (status !== "completed" && status !== "partial") {
+    throw new Error("回复正文只能在终态采集更新中持久化");
+  }
+  if (!captureSource) throw new Error("回复正文必须声明采集来源");
+  if (captureSource === "native-copy" && nativeMimeType === undefined) {
+    throw new Error("原生 Copy 回复正文必须声明剪贴板 MIME 类型");
   }
 }
 
@@ -574,12 +574,29 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | unde
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  await db.transaction("rw", db.sessions, db.turns, db.exchanges, db.metadata, async () => {
-    await db.exchanges.where("sessionId").equals(id).delete();
-    await db.turns.where("sessionId").equals(id).delete();
-    await db.sessions.delete(id);
-    if ((await db.metadata.get(ACTIVE_SESSION_KEY))?.value === id) {
-      await db.metadata.delete(ACTIVE_SESSION_KEY);
-    }
-  });
+  await db.transaction(
+    "rw",
+    db.sessions,
+    db.turns,
+    db.exchanges,
+    db.metadata,
+    db.acquisitionSnapshots,
+    async () => {
+      const turnIds = new Set(
+        (await db.turns.where("sessionId").equals(id).primaryKeys()).map(String),
+      );
+      if (turnIds.size) {
+        await db.acquisitionSnapshots
+          .where("turnId")
+          .anyOf([...turnIds])
+          .delete();
+      }
+      await db.exchanges.where("sessionId").equals(id).delete();
+      await db.turns.where("sessionId").equals(id).delete();
+      await db.sessions.delete(id);
+      if ((await db.metadata.get(ACTIVE_SESSION_KEY))?.value === id) {
+        await db.metadata.delete(ACTIVE_SESSION_KEY);
+      }
+    },
+  );
 }

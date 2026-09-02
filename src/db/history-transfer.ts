@@ -121,7 +121,9 @@ const exchangeSchema = z
         "unsupported",
       ])
       .optional(),
-    captureSource: z.enum(["dom", "native-copy", "provider-api"]).optional(),
+    captureSource: z
+      .enum(["dom", "native-copy", "provider-api", "network", "virtual-dom"])
+      .optional(),
     nativeMimeType: z.enum(["text/markdown", "text/plain", "text/html"]).optional(),
     submittedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),

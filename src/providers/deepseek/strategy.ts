@@ -4,10 +4,16 @@ import { findFirstUsable, readComposerValue, waitForElement } from "../../core/p
 import { ProviderError } from "../../core/providers/errors";
 import { deepseekDefinition } from "./definition";
 import { deepseekNativeCopyAdapter } from "./native-copy";
+import {
+  DEEPSEEK_ACQUISITION_ADAPTER_VERSION,
+  deepseekAcquisitionAdapter,
+} from "./runtime-acquisition";
 import { deepseekSelectors } from "./selectors";
 
 export class DeepSeekStrategy extends BaseDomStrategy {
   protected override readonly nativeCopyAdapter = deepseekNativeCopyAdapter;
+  protected override readonly acquisitionAdapter = deepseekAcquisitionAdapter;
+  protected override readonly acquisitionAdapterVersion = DEEPSEEK_ACQUISITION_ADAPTER_VERSION;
   private busyControlSignature: string | undefined;
 
   constructor() {

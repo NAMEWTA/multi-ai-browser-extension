@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { db, type SessionRecord } from "./database";
+import { saveAcquisitionSnapshot } from "./acquisition-snapshot-service";
 import {
   activateSession,
   applyResponseUpdate,
@@ -50,6 +51,7 @@ describe("session history", () => {
       db.turns.clear(),
       db.exchanges.clear(),
       db.metadata.clear(),
+      db.acquisitionSnapshots.clear(),
     ]);
   });
 
@@ -119,8 +121,49 @@ describe("session history", () => {
     expect(await db.metadata.get("active-session-id")).toBeUndefined();
 
     const session = await createSession("待删除");
+    const turn = await recordSuccessfulTurn(
+      session.id,
+      "待删除",
+      [targets[0]!],
+      [{ panelId: "panel-ds", status: "submitted" }],
+    );
+    await saveAcquisitionSnapshot({
+      turnId: turn.id,
+      panelId: "panel-ds",
+      providerMessageId: "message-delete",
+      revision: 1,
+      adapterVersion: "test-v2",
+      verification: "verified",
+      snapshot: {
+        schemaVersion: 1,
+        providerId: "deepseek",
+        conversationId: "conversation-delete",
+        capturedAt: Date.now(),
+        messages: [
+          {
+            id: "message-delete",
+            role: "assistant",
+            content: [{ kind: "paragraph", text: "Delete me" }],
+          },
+        ],
+        source: "provider-api",
+        completeness: {
+          state: "complete",
+          capturedMessageCount: 1,
+          expectedMessageCount: 1,
+          capturedContentChars: 9,
+          expectedContentChars: 9,
+          hasBeginning: true,
+          hasEnd: true,
+        },
+        evidence: { stableMessageKeys: ["message-delete"], signals: ["test"] },
+        diagnostics: { strategyId: "test", entries: [] },
+      },
+    });
+    expect(await db.acquisitionSnapshots.count()).toBe(1);
     await deleteSession(session.id);
     expect(await db.metadata.get("active-session-id")).toBeUndefined();
+    expect(await db.acquisitionSnapshots.count()).toBe(0);
   });
 
   it("persists complete provider URLs without changing content ordering time", async () => {
@@ -305,11 +348,11 @@ describe("session history", () => {
     expect((await getSessionDetail(session.id))?.turns[0]?.turn.status).toBe("partial");
   });
 
-  it("rejects response bodies that did not come from a terminal native Copy", async () => {
-    const session = await createSession("拒绝 DOM 正文");
+  it("persists a terminal response body from a declared acquisition source", async () => {
+    const session = await createSession("保存 DOM 正文");
     const turn = await recordSuccessfulTurn(
       session.id,
-      "拒绝 DOM 正文",
+      "保存 DOM 正文",
       [targets[0]!],
       [{ panelId: "panel-ds", status: "submitted" }],
     );
@@ -322,10 +365,10 @@ describe("session history", () => {
         terminalReason: "completed",
         captureSource: "dom",
       }),
-    ).rejects.toThrow("终态原生 Copy");
-    expect(
-      (await getSessionDetail(session.id))?.turns[0]?.exchanges[0]?.responseText,
-    ).toBeUndefined();
+    ).resolves.toBeUndefined();
+    expect((await getSessionDetail(session.id))?.turns[0]?.exchanges[0]?.responseText).toBe(
+      "DOM fragment",
+    );
   });
 
   it("keeps a completed revision when stale or nonterminal updates arrive later", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ProviderAcquisitionAdapter } from "../acquisition";
 import { BaseDomStrategy } from "./base-dom-strategy";
 import { waitForElement } from "./dom";
 import { normalizeProviderError, ProviderError } from "./errors";
@@ -48,6 +49,56 @@ class NativeTargetOnlyStrategy extends BaseDomStrategy {
       submit: ["#send"],
       blocked: ["#verification"],
       responses: [".selector-that-does-not-match-the-copy-turn"],
+      responsePollMs: 20,
+    });
+  }
+}
+
+class ApiOnlyStrategy extends BaseDomStrategy {
+  protected override readonly acquisitionAdapter: ProviderAcquisitionAdapter = {
+    providerId: "deepseek",
+    strategiesByPriority: [
+      {
+        id: "test-provider-api",
+        source: "provider-api",
+        acquire: async () => ({
+          schemaVersion: 1,
+          providerId: "deepseek",
+          conversationId: "conversation-api",
+          capturedAt: Date.now(),
+          messages: [
+            { id: "user-api", role: "user", content: [{ kind: "paragraph", text: "prompt" }] },
+            {
+              id: "assistant-api",
+              role: "assistant",
+              content: [{ kind: "paragraph", text: "Complete API answer" }],
+            },
+          ],
+          source: "provider-api",
+          completeness: {
+            state: "complete",
+            capturedMessageCount: 2,
+            expectedMessageCount: 2,
+            capturedContentChars: 25,
+            hasBeginning: true,
+            hasEnd: true,
+          },
+          evidence: {
+            stableMessageKeys: ["user-api", "assistant-api"],
+            signals: ["terminal-provider-response"],
+          },
+          diagnostics: { strategyId: "test-provider-api", entries: [] },
+        }),
+      },
+    ],
+    qualityPolicy: { requireComplete: true },
+  };
+  protected override readonly acquisitionAdapterVersion = "test-provider-api-v2";
+
+  constructor() {
+    super(definition, {
+      composer: ["#composer"],
+      submit: ["#send"],
       responsePollMs: 20,
     });
   }
@@ -216,17 +267,54 @@ describe("BaseDomStrategy", () => {
     expect(click).not.toHaveBeenCalled();
   });
 
-  it("requires a provider native Copy adapter for response bodies", async () => {
-    const result = await new TestStrategy().captureResponse(
+  it("can finalize a scoped terminal DOM response without a native Copy adapter", async () => {
+    document.body.innerHTML =
+      '<article class="assistant-response"><p>Complete scoped answer.</p></article>';
+    const result = await new TestStrategy().finalizeResponse(
       { document, window },
       { count: 0, lastText: "" },
     );
 
-    expect(result).toEqual({
-      status: "unsupported",
-      terminalReason: "unsupported",
-      message: "当前站点未提供原生 Copy 回复采集能力",
+    expect(result).toMatchObject({
+      status: "completed",
+      captureSource: "dom",
+      text: "Complete scoped answer.",
+      acquisition: { verification: "bounded" },
     });
+  });
+
+  it("accepts a complete provider API snapshot without waiting for a DOM or Copy target", async () => {
+    vi.useFakeTimers();
+    try {
+      const capture = new ApiOnlyStrategy().captureResponse(
+        {
+          document,
+          window,
+          acquisitionNetwork: {
+            latest: vi.fn(),
+            replay: vi.fn(),
+            fetchJson: vi.fn(),
+          },
+          responseTimeoutMs: 2_000,
+        },
+        { count: 0, lastText: "" },
+        { text: "prompt" },
+      );
+
+      await vi.advanceTimersByTimeAsync(21);
+
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        captureSource: "provider-api",
+        text: "Complete API answer",
+        acquisition: {
+          providerMessageId: "assistant-api",
+          verification: "verified",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for a stable terminal target and returns only the native Copy payload", async () => {
@@ -292,7 +380,7 @@ describe("BaseDomStrategy", () => {
     }
   });
 
-  it("fails without persisting visible DOM when native Copy is invalid", async () => {
+  it("falls back to the Copy target's scoped DOM when native Copy is invalid", async () => {
     vi.useFakeTimers();
     try {
       const strategy = new NativeTargetOnlyStrategy();
@@ -305,10 +393,12 @@ describe("BaseDomStrategy", () => {
         '<article class="copy-turn" data-turn-id="current"><p>Visible but untrusted DOM body</p><button class="copy">copy</button></article>';
       await vi.advanceTimersByTimeAsync(300);
 
-      await expect(capture).resolves.toEqual({
-        status: "failed",
-        terminalReason: "failed",
-        message: "官网回复已结束，但从本轮原生 Copy 按钮取得的内容无效",
+      await expect(capture).resolves.toMatchObject({
+        status: "completed",
+        terminalReason: "completed",
+        captureSource: "dom",
+        text: "Visible but untrusted DOM body",
+        acquisition: { verification: "bounded" },
       });
     } finally {
       vi.useRealTimers();
@@ -333,7 +423,7 @@ describe("BaseDomStrategy", () => {
       await expect(capture).resolves.toEqual({
         status: "timeout",
         terminalReason: "timeout",
-        message: "等待本轮回复的原生 Copy 按钮进入稳定终态超时",
+        message: "等待本轮回复进入可验证终态超时",
       });
     } finally {
       vi.useRealTimers();

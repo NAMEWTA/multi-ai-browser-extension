@@ -1,0 +1,25 @@
+{
+  "downlink_body": {
+    "pull_singe_chain_downlink_body": {
+      "has_more": true,
+      "next_index_in_conv": 4,
+      "total_count": 6,
+      "messages": [
+        {
+          "message_id": "message-5",
+          "parent_id": "message-4",
+          "index_in_conv": 5,
+          "sender_type": 1,
+          "content": "{\"text\":\"Follow-up prompt\"}"
+        },
+        {
+          "message_id": "message-6",
+          "parent_id": "message-5",
+          "index_in_conv": 6,
+          "sender_type": 2,
+          "content_block": "[{\"block_type\":\"reasoning\",\"text\":\"private reasoning\"},{\"block_type\":\"markdown\",\"markdown\":\"## Latest answer\\n\\nFinal paragraph.\"}]"
+        }
+      ]
+    }
+  }
+}

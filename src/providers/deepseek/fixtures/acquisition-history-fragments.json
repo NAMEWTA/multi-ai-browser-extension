@@ -1,0 +1,56 @@
+{
+  "code": 0,
+  "data": {
+    "biz_data": {
+      "chat_session": {
+        "current_message_id": 5
+      },
+      "total_count": 5,
+      "chat_messages": [
+        {
+          "message_id": 1,
+          "parent_id": null,
+          "role": "USER",
+          "inserted_at": 100,
+          "fragments": [{ "type": "REQUEST", "content": "First prompt" }]
+        },
+        {
+          "message_id": 2,
+          "parent_id": 1,
+          "role": "ASSISTANT",
+          "inserted_at": 200,
+          "fragments": [
+            { "type": "THINK", "content": "private chain of thought" },
+            { "type": "RESPONSE", "content": "# First answer" },
+            { "type": "RESPONSE", "content": "First answer body." }
+          ]
+        },
+        {
+          "message_id": 3,
+          "parent_id": 2,
+          "role": "USER",
+          "inserted_at": 300,
+          "fragments": [{ "type": "REQUEST", "content": "Current prompt" }]
+        },
+        {
+          "message_id": 4,
+          "parent_id": 3,
+          "role": "ASSISTANT",
+          "inserted_at": 400,
+          "fragments": [{ "type": "RESPONSE", "content": "Inactive sibling answer" }]
+        },
+        {
+          "message_id": 5,
+          "parent_id": 3,
+          "role": "ASSISTANT",
+          "inserted_at": 500,
+          "fragments": [
+            { "type": "THINK", "content": "another private thought" },
+            { "type": "RESPONSE", "content": "## Current answer" },
+            { "type": "RESPONSE", "content": "- first\n- second\n- final" }
+          ]
+        }
+      ]
+    }
+  }
+}

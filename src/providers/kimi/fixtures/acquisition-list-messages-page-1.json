@@ -1,0 +1,34 @@
+{
+  "messages": [
+    {
+      "id": "assistant-2",
+      "parentId": "user-2",
+      "role": "ROLE_ASSISTANT",
+      "status": "MESSAGE_STATUS_FINISHED",
+      "createTime": "2026-09-01T10:03:00Z",
+      "blocks": [
+        {
+          "id": "block-4",
+          "messageId": "assistant-2",
+          "text": { "content": "Second answer belongs only to the second prompt." }
+        }
+      ]
+    },
+    {
+      "id": "user-2",
+      "parentId": "assistant-1",
+      "role": "ROLE_USER",
+      "status": "MESSAGE_STATUS_FINISHED",
+      "createTime": "2026-09-01T10:02:00Z",
+      "blocks": [
+        {
+          "id": "block-3",
+          "messageId": "user-2",
+          "text": { "content": "second prompt" }
+        }
+      ]
+    }
+  ],
+  "nextPageToken": "older-page",
+  "totalCount": 4
+}

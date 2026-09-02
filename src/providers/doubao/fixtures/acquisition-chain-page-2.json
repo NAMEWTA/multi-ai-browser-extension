@@ -1,0 +1,40 @@
+{
+  "pull_single_chain_downlink_body": {
+    "has_more": false,
+    "message_count": 6,
+    "messages": [
+      {
+        "message_id": "message-1",
+        "index_in_conv": 1,
+        "role": "user",
+        "content": "Initial prompt"
+      },
+      {
+        "message_id": "message-2",
+        "parent_id": "message-1",
+        "index_in_conv": 2,
+        "role": "assistant",
+        "content_block": [{ "type": "markdown", "markdown": "Initial answer" }]
+      },
+      {
+        "message_id": "message-3",
+        "parent_id": "message-2",
+        "index_in_conv": 3,
+        "user_type": 1,
+        "message_content": { "text": "Second prompt" }
+      },
+      {
+        "message_id": "message-4",
+        "parent_id": "message-3",
+        "index_in_conv": 4,
+        "user_type": 2,
+        "content_obj": {
+          "blocks": [
+            { "kind": "search_status", "text": "Searching" },
+            { "kind": "paragraph", "text": "Second answer" }
+          ]
+        }
+      }
+    ]
+  }
+}

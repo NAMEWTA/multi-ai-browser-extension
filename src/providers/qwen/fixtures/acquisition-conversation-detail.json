@@ -1,0 +1,58 @@
+{
+  "success": true,
+  "data": {
+    "chat": {
+      "id": "qwen-chat-fixture",
+      "title": "Qwen fixture conversation",
+      "history": {
+        "current_id": "assistant-current",
+        "message_count": 5,
+        "messages": {
+          "user-root": {
+            "role": "user",
+            "content": "First prompt",
+            "timestamp": 100
+          },
+          "assistant-first": {
+            "id": "assistant-first",
+            "parentId": "user-root",
+            "role": "assistant",
+            "timestamp": 200,
+            "content_list": [
+              { "phase": "think", "content": "private reasoning" },
+              { "phase": "answer", "content": "# First answer" }
+            ]
+          },
+          "user-current": {
+            "id": "user-current",
+            "parent_id": "assistant-first",
+            "role": "user",
+            "timestamp": 300,
+            "content": "Current prompt"
+          },
+          "assistant-inactive": {
+            "id": "assistant-inactive",
+            "parent_id": "user-current",
+            "role": "assistant",
+            "timestamp": 400,
+            "content_list": [{ "phase": "answer", "content": "Inactive branch" }]
+          },
+          "assistant-current": {
+            "id": "assistant-current",
+            "parent_id": "user-current",
+            "role": "assistant",
+            "timestamp": 500,
+            "content_list": [
+              { "phase": "reasoning", "content": "hidden thought" },
+              { "phase": "answer", "content": "## Current answer" },
+              {
+                "phase": "answer",
+                "content": "## Current answer\n\n- first\n- second\n- final"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

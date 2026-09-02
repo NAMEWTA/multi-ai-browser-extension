@@ -62,6 +62,7 @@ export interface FrameContext {
   readonly document: Document;
   readonly window: Window;
   readonly nativeCopy?: NativeCopyClient;
+  readonly acquisitionNetwork?: AcquisitionNetworkClient;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly responseTimeoutMs?: number;
@@ -81,6 +82,8 @@ export interface ProbeResult {
 export interface ResponseBaseline {
   readonly count: number;
   readonly lastText: string;
+  /** Page-clock boundary used to reject provider API observations from before this send. */
+  readonly acquisitionObservedAfter?: number;
   readonly keys?: readonly string[];
   readonly lastKey?: string;
   readonly entries?: readonly ResponseBaselineEntry[];
@@ -107,7 +110,17 @@ export type ResponseTerminalReason =
   | "failed"
   | "unsupported";
 
-export type ResponseCaptureSource = "dom" | "native-copy" | "provider-api";
+export type ResponseCaptureSource =
+  "dom" | "native-copy" | "provider-api" | "network" | "virtual-dom";
+
+export type ResponseCaptureVerification = "verified" | "bounded" | "partial" | "unknown";
+
+export interface ResponseAcquisitionMetadata {
+  readonly snapshot: ConversationSnapshot;
+  readonly providerMessageId: string;
+  readonly adapterVersion: string;
+  readonly verification: ResponseCaptureVerification;
+}
 
 export type NativeCopyMimeType = "text/markdown" | "text/plain" | "text/html";
 
@@ -179,6 +192,7 @@ export interface ResponseCaptureUpdate {
   readonly terminalReason?: ResponseTerminalReason;
   readonly captureSource?: ResponseCaptureSource;
   readonly nativeMimeType?: NativeCopyMimeType;
+  readonly acquisition?: ResponseAcquisitionMetadata;
 }
 
 export interface ComposerCandidateDiagnostic {
@@ -220,3 +234,5 @@ export interface ProviderPlugin {
   readonly definition: ProviderDefinition;
   createStrategy(): ProviderStrategy;
 }
+import type { ConversationSnapshot } from "../acquisition/contracts";
+import type { AcquisitionNetworkClient } from "../../runtime/acquisition-network-client";

@@ -1,0 +1,20 @@
+{
+  "data": {
+    "has_more": true,
+    "messages": [
+      {
+        "id": "partial-user",
+        "role": "user",
+        "index": 10,
+        "content": "Visible prompt"
+      },
+      {
+        "id": "partial-answer",
+        "parent_id": "partial-user",
+        "role": "assistant",
+        "index": 20,
+        "content_list": [{ "phase": "answer", "content": "Visible but incomplete answer" }]
+      }
+    ]
+  }
+}

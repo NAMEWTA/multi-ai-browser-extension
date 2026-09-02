@@ -1,5 +1,12 @@
 import Dexie, { type EntityTable } from "dexie";
 import type {
+  AcquisitionCompleteness,
+  AcquisitionEvidence,
+  AcquisitionSource,
+  ContentBlock,
+  ConversationRole,
+} from "../core/acquisition/contracts";
+import type {
   NativeCopyMimeType,
   ProviderId,
   ResponseCaptureSource,
@@ -88,11 +95,43 @@ export interface MetadataRecord {
   value: string;
 }
 
+export type AcquisitionVerification = "verified" | "bounded" | "partial" | "unknown";
+
+/**
+ * Immutable persistence envelope for one provider message revision.
+ * Conversation-level acquisition metadata is copied onto every revision so it can be audited later.
+ */
+export interface AcquisitionSnapshotRecord {
+  id: string;
+  schemaVersion: 2;
+  turnId: string;
+  panelId: string;
+  providerId: ProviderId;
+  conversationId: string;
+  providerMessageId: string;
+  revision: number;
+  role: ConversationRole;
+  content: readonly ContentBlock[];
+  parentId?: string;
+  branchId?: string;
+  messageCreatedAt?: number;
+  source: AcquisitionSource;
+  completeness: AcquisitionCompleteness;
+  verification: AcquisitionVerification;
+  /** True only for the assistant message selected as this extension turn's response. */
+  selected?: boolean;
+  evidence: AcquisitionEvidence;
+  adapterVersion: string;
+  capturedAt: number;
+  persistedAt: number;
+}
+
 export class AppDatabase extends Dexie {
   sessions!: EntityTable<SessionRecord, "id">;
   turns!: EntityTable<TurnRecord, "id">;
   exchanges!: EntityTable<ProviderExchangeRecord, "id">;
   metadata!: EntityTable<MetadataRecord, "key">;
+  acquisitionSnapshots!: EntityTable<AcquisitionSnapshotRecord, "id">;
 
   constructor(name = "multi-ai-workspace-v4") {
     super(name);
@@ -101,6 +140,22 @@ export class AppDatabase extends Dexie {
       turns: "id, sessionId, [sessionId+sequence], createdAt",
       exchanges: "id, sessionId, turnId, [turnId+providerId], providerId",
       metadata: "key",
+    });
+    this.version(2).stores({
+      sessions: "id, source, createdAt, contentUpdatedAt, lastOpenedAt, pinnedAt",
+      turns: "id, sessionId, [sessionId+sequence], createdAt",
+      exchanges: "id, sessionId, turnId, [turnId+providerId], providerId",
+      metadata: "key",
+      acquisitionSnapshots:
+        "id, [turnId+panelId], [providerId+conversationId+providerMessageId], &[providerId+conversationId+providerMessageId+revision], capturedAt, persistedAt",
+    });
+    this.version(3).stores({
+      sessions: "id, source, createdAt, contentUpdatedAt, lastOpenedAt, pinnedAt",
+      turns: "id, sessionId, [sessionId+sequence], createdAt",
+      exchanges: "id, sessionId, turnId, [turnId+providerId], providerId",
+      metadata: "key",
+      acquisitionSnapshots:
+        "id, turnId, [turnId+panelId], [providerId+conversationId+providerMessageId], &[turnId+panelId+providerId+conversationId+providerMessageId+revision], capturedAt, persistedAt",
     });
   }
 }

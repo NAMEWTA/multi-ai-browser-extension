@@ -48,7 +48,7 @@ describe("DoubaoStrategy", () => {
     const strategy = new DoubaoStrategy();
     const ctx = { document, window, timeoutMs: 100 };
 
-    await expect(strategy.prepareSubmit(ctx)).resolves.toEqual({ count: 0, lastText: "" });
+    await expect(strategy.prepareSubmit(ctx)).resolves.toMatchObject({ count: 0, lastText: "" });
     await strategy.stagePrompt(ctx, { text: "第一行\n第二行" });
     expect(readComposerValue(composer)).toBe("第一行\n第二行");
     await strategy.submit(ctx);

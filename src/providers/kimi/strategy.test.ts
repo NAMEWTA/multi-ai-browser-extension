@@ -70,7 +70,11 @@ describe("KimiStrategy", () => {
     const strategy = new KimiStrategy();
     const ctx = { document, window, timeoutMs: 100 };
 
-    await expect(strategy.prepareSubmit(ctx)).resolves.toEqual({ count: 0, lastText: "" });
+    await expect(strategy.prepareSubmit(ctx)).resolves.toMatchObject({
+      count: 0,
+      lastText: "",
+      acquisitionObservedAfter: expect.any(Number),
+    });
     await strategy.stagePrompt(ctx, { text: "确认后再发送" });
     expect(composer).toHaveTextContent("确认后再发送");
     expect(click).not.toHaveBeenCalled();

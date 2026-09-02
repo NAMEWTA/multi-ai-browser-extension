@@ -9,10 +9,13 @@ import {
 import { ProviderError } from "../../core/providers/errors";
 import { kimiDefinition } from "./definition";
 import { kimiNativeCopyAdapter } from "./native-copy";
+import { KIMI_ACQUISITION_ADAPTER_VERSION, kimiAcquisitionAdapter } from "./runtime-acquisition";
 import { kimiSelectors } from "./selectors";
 
 export class KimiStrategy extends BaseDomStrategy {
   protected override readonly nativeCopyAdapter = kimiNativeCopyAdapter;
+  protected override readonly acquisitionAdapter = kimiAcquisitionAdapter;
+  protected override readonly acquisitionAdapterVersion = KIMI_ACQUISITION_ADAPTER_VERSION;
 
   constructor() {
     super(kimiDefinition, kimiSelectors);

@@ -26,7 +26,7 @@ describe("QwenStrategy", () => {
     const strategy = new QwenStrategy();
     const ctx = { document, window, timeoutMs: 100 };
 
-    await expect(strategy.prepareSubmit(ctx)).resolves.toEqual({ count: 0, lastText: "" });
+    await expect(strategy.prepareSubmit(ctx)).resolves.toMatchObject({ count: 0, lastText: "" });
     const lateDecoy = document.createElement("textarea");
     lateDecoy.id = "chat-input";
     document.body.prepend(lateDecoy);
@@ -58,7 +58,7 @@ describe("QwenStrategy", () => {
     const strategy = new QwenStrategy();
     const ctx = { document, window, timeoutMs: 100 };
 
-    await expect(strategy.prepareSubmit(ctx)).resolves.toEqual({ count: 0, lastText: "" });
+    await expect(strategy.prepareSubmit(ctx)).resolves.toMatchObject({ count: 0, lastText: "" });
     await strategy.stagePrompt(ctx, { text: "正式问题" });
 
     expect(composer).toHaveTextContent("正式问题");

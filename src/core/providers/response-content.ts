@@ -97,6 +97,17 @@ export function responseElementToMarkdown(
   return responseContentToMarkdown(cloneResponseContent(root, options).content);
 }
 
+export function responseElementToText(
+  root: HTMLElement,
+  options: Pick<
+    ResponseContentOptions,
+    "content" | "finalContainers" | "contentBlocks" | "exclude" | "statusOnly"
+  > = {},
+): string {
+  const content = cloneResponseContent(root, options).content;
+  return normalizeComposerValue(content.innerText ?? content.textContent ?? "");
+}
+
 export function responseHtmlToMarkdown(html: string, document: Document): string {
   const container = document.createElement("div");
   container.innerHTML = html;

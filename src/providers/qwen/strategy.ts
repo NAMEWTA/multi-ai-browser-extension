@@ -8,10 +8,13 @@ import {
 } from "../../core/providers/dom";
 import { qwenDefinition } from "./definition";
 import { qwenNativeCopyAdapter } from "./native-copy";
+import { QWEN_ACQUISITION_ADAPTER_VERSION, qwenAcquisitionAdapter } from "./runtime-acquisition";
 import { qwenSelectors } from "./selectors";
 
 export class QwenStrategy extends BaseDomStrategy {
   protected override readonly nativeCopyAdapter = qwenNativeCopyAdapter;
+  protected override readonly acquisitionAdapter = qwenAcquisitionAdapter;
+  protected override readonly acquisitionAdapterVersion = QWEN_ACQUISITION_ADAPTER_VERSION;
 
   constructor() {
     super(qwenDefinition, qwenSelectors);

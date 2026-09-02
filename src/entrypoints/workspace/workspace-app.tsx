@@ -31,6 +31,7 @@ import {
 import { browser } from "wxt/browser";
 import type { ProviderResponseUpdate, ProviderRunResult } from "../../core/messaging/protocol";
 import { mergeResponseRevision } from "../../core/messaging/response-revision";
+import type { ConversationSnapshot } from "../../core/acquisition";
 import {
   workspaceFrameStatusSchema,
   workspacePanelUrlUpdateSchema,
@@ -68,6 +69,7 @@ import {
   type BufferedResponseUpdate,
   type SessionDetail,
 } from "../../db/session-service";
+import { saveAcquisitionSnapshot } from "../../db/acquisition-snapshot-service";
 import {
   exportHistoryJsonl,
   HISTORY_FILE_EXTENSION,
@@ -336,6 +338,9 @@ export function WorkspaceApp() {
           })),
         },
       );
+      if (earlyResponses) {
+        await Promise.all([...earlyResponses.values()].map(persistAcquisitionUpdate));
+      }
       await flushBufferedResponses(turnId);
       pendingTurnIdsRef.current.delete(turnId);
       await refreshHistory();
@@ -1500,6 +1505,7 @@ function toBufferedResponseUpdate(
 async function persistResponseUpdate(
   update: Omit<ProviderResponseUpdate, "type"> & { status: ExchangeResponseStatus },
 ): Promise<void> {
+  await persistAcquisitionUpdate(update);
   await applyResponseUpdate(
     update.turnId,
     update.panelId,
@@ -1516,6 +1522,22 @@ async function persistResponseUpdate(
       ...(update.nativeMimeType ? { nativeMimeType: update.nativeMimeType } : {}),
     },
   );
+}
+
+async function persistAcquisitionUpdate(
+  update: Omit<ProviderResponseUpdate, "type">,
+): Promise<void> {
+  const acquisition = update.acquisition;
+  if (!acquisition) return;
+  await saveAcquisitionSnapshot({
+    turnId: update.turnId,
+    panelId: update.panelId,
+    providerMessageId: acquisition.providerMessageId,
+    revision: update.revision,
+    adapterVersion: acquisition.adapterVersion,
+    verification: acquisition.verification,
+    snapshot: acquisition.snapshot as ConversationSnapshot,
+  });
 }
 
 function ProviderMark({ definition }: { definition: ProviderDefinition }) {

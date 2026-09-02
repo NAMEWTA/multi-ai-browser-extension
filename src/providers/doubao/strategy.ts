@@ -10,10 +10,16 @@ import {
 import { ProviderError } from "../../core/providers/errors";
 import { doubaoDefinition } from "./definition";
 import { doubaoNativeCopyAdapter } from "./native-copy";
+import {
+  DOUBAO_ACQUISITION_ADAPTER_VERSION,
+  doubaoAcquisitionAdapter,
+} from "./runtime-acquisition";
 import { doubaoSelectors } from "./selectors";
 
 export class DoubaoStrategy extends BaseDomStrategy {
   protected override readonly nativeCopyAdapter = doubaoNativeCopyAdapter;
+  protected override readonly acquisitionAdapter = doubaoAcquisitionAdapter;
+  protected override readonly acquisitionAdapterVersion = DOUBAO_ACQUISITION_ADAPTER_VERSION;
 
   constructor() {
     super(doubaoDefinition, doubaoSelectors);
